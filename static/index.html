@@ -1,0 +1,1234 @@
+<!DOCTYPE html>
+<html lang="te">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telugu Maze Word Editor</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, sans-serif; background: #f5f5f5; color: #333; }
+
+        .header {
+            background: #1a237e; color: white; padding: 10px 24px;
+            display: flex; justify-content: space-between; align-items: center;
+            position: sticky; top: 0; z-index: 100;
+        }
+        .header h1 { font-size: 18px; }
+        .header .subtitle { font-size: 11px; opacity: 0.7; }
+        .nav-controls { display: flex; gap: 8px; align-items: center; }
+        .nav-controls button {
+            background: #3949ab; color: white; border: none; padding: 7px 14px;
+            border-radius: 4px; cursor: pointer; font-size: 13px;
+        }
+        .nav-controls button:hover { background: #5c6bc0; }
+        .nav-controls button:disabled { background: #555; cursor: not-allowed; }
+        .nav-controls select { padding: 7px; font-size: 13px; border-radius: 4px; border: 1px solid #ccc; }
+
+        .container { max-width: 1200px; margin: 16px auto; padding: 0 16px; }
+
+        .maze-image-container {
+            text-align: center; background: white; border-radius: 8px;
+            padding: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 16px;
+        }
+        .maze-image-container img { max-width: 100%; max-height: 420px; }
+
+        .view-toggle {
+            display: flex; gap: 4px; margin-bottom: 8px; justify-content: center;
+        }
+        .view-toggle button {
+            padding: 4px 14px; border: 1px solid #c5cae9; border-radius: 4px;
+            background: white; cursor: pointer; font-size: 12px; color: #333;
+        }
+        .view-toggle button.active { background: #1a237e; color: white; border-color: #1a237e; }
+
+        .maze-grid-container { display: inline-block; }
+        .maze-grid {
+            border-collapse: collapse; margin: 0 auto;
+            font-family: 'Noto Sans Telugu', 'Gautami', sans-serif;
+        }
+        .maze-grid td {
+            width: 52px; height: 52px; text-align: center; vertical-align: middle;
+            border: 2px solid #333; font-size: 18px; font-weight: bold;
+            padding: 0; position: relative; background: white;
+        }
+        .maze-grid td.blocker {
+            background: #4caf50; border-color: #333;
+        }
+        .maze-grid td.blocker::after {
+            content: '*'; color: #2e7d32; font-size: 24px; font-weight: bold;
+        }
+        .maze-grid .cell-number {
+            position: absolute; top: 1px; left: 3px;
+            font-size: 10px; color: #d32f2f; font-weight: bold;
+            font-family: Arial, sans-serif;
+        }
+        .maze-grid .cell-letter {
+            font-size: 18px; color: #000;
+        }
+        .maze-grid td.highlight {
+            background: #fff9c4 !important;
+        }
+        .maze-grid td.conflict {
+            background: #ffcdd2 !important;
+            border-color: #d32f2f !important;
+        }
+
+        .words-section {
+            background: white; border-radius: 8px; padding: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .section-header {
+            display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;
+        }
+        .section-header h2 { color: #1a237e; font-size: 16px; }
+
+        .transliteration-hint {
+            background: #e8f5e9; padding: 6px 14px; border-radius: 4px;
+            font-size: 11px; color: #2e7d32; margin-bottom: 10px;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+        th {
+            background: #e8eaf6; color: #1a237e; padding: 8px 10px;
+            text-align: left; font-size: 12px; position: sticky; top: 48px; z-index: 10;
+        }
+        td { padding: 5px 8px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: top; }
+        tr:hover { background: #f5f5ff; }
+
+        .editable {
+            font-family: 'Noto Sans Telugu', 'Gautami', sans-serif;
+            cursor: pointer; padding: 2px 4px; border-radius: 3px;
+            min-height: 20px; display: inline-block; min-width: 40px;
+        }
+        .editable:hover { background: #e3f2fd; }
+        .editable.word-cell { font-size: 14px; font-weight: 500; }
+
+        .edit-container { position: relative; }
+        .edit-input {
+            width: 100%; padding: 4px 8px; border: 2px solid #3949ab; border-radius: 3px;
+            font-size: 13px; font-family: 'Noto Sans Telugu', 'Gautami', sans-serif;
+            outline: none;
+        }
+        .edit-input.telugu-mode { background: #fff8e1; }
+
+        .match-warning {
+            background: #fff3e0; color: #e65100; padding: 3px 6px; border-radius: 3px;
+            font-size: 11px; margin-top: 3px; display: none;
+        }
+        .match-warning.show { display: block; }
+
+        .save-indicator {
+            font-size: 11px; padding: 2px 6px; border-radius: 3px; display: none;
+        }
+        .save-indicator.saved { display: inline; background: #e8f5e9; color: #2e7d32; }
+        .save-indicator.saving { display: inline; background: #fff3e0; color: #ef6c00; }
+        .save-indicator.error { display: inline; background: #ffebee; color: #c62828; }
+
+        .suggestions-panel {
+            background: white; border-radius: 8px; padding: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-top: 16px; display: none;
+        }
+        .suggestions-panel.show { display: block; }
+        .suggestions-panel h3 {
+            color: #1a237e; font-size: 14px; margin-bottom: 8px;
+            border-bottom: 2px solid #e8eaf6; padding-bottom: 6px;
+        }
+        .suggestions-panel .sug-info {
+            font-size: 11px; color: #666; margin-bottom: 8px;
+        }
+        .suggestions-list {
+            display: flex; flex-wrap: wrap; gap: 6px; max-height: 300px; overflow-y: auto;
+        }
+        .sug-word {
+            padding: 4px 10px; background: #e8eaf6; border-radius: 4px; cursor: pointer;
+            font-family: 'Noto Sans Telugu', 'Gautami', sans-serif;
+            font-size: 13px; border: 1px solid #c5cae9; transition: all 0.15s;
+        }
+        .sug-word:hover { background: #3949ab; color: white; border-color: #3949ab; }
+
+        .alt-badge {
+            display: inline-block; background: #e3f2fd; color: #1565c0; padding: 2px 8px;
+            border-radius: 10px; font-size: 11px; cursor: pointer; border: 1px solid #bbdefb;
+        }
+        .alt-badge:hover { background: #1565c0; color: white; }
+        .alt-badge.active { background: #1565c0; color: white; }
+
+        .pair-badge {
+            display: inline-block; background: #fff3e0; color: #e65100; padding: 2px 6px;
+            border-radius: 10px; font-size: 11px; cursor: pointer; border: 1px solid #ffcc80;
+            margin-left: 4px;
+        }
+        .pair-badge:hover { background: #e65100; color: white; }
+        .pair-badge.first  { background: #ff9800; color: white; border-color: #ff9800; }
+        .pair-badge.second { background: #d84315; color: white; border-color: #d84315; }
+        .pair-badge.eligible { box-shadow: 0 0 0 2px #ffb74d; }
+
+        .pair-row {
+            display: flex; align-items: center; gap: 8px; padding: 6px 4px;
+            border-bottom: 1px solid #eceff1; cursor: pointer; border-radius: 4px;
+            font-family: 'Noto Sans Telugu', 'Gautami', sans-serif; font-size: 14px;
+        }
+        .pair-row:hover { background: #fff8e1; }
+        .pair-row .w  { padding: 2px 8px; background: #e8eaf6; border-radius: 4px;
+                        border: 1px solid #c5cae9; }
+        .pair-row .w.rev { background: #f3e5f5; border-color: #ce93d8; }
+        .pair-row .syl { color: #e65100; font-weight: bold; padding: 0 4px; }
+        .pair-row .arr { color: #888; font-size: 12px; }
+        .pair-mode-hint { background: #fff8e1; border: 1px solid #ffe082;
+                          padding: 6px 10px; border-radius: 4px; margin: 8px 0;
+                          font-size: 13px; color: #6d4c00; }
+
+        .preview-box {
+            position: fixed; bottom: 16px; right: 16px; background: #263238; color: #80cbc4;
+            padding: 8px 14px; border-radius: 6px; font-size: 14px; display: none;
+            font-family: 'Noto Sans Telugu', 'Gautami', monospace; z-index: 200;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .preview-box.show { display: block; }
+        .preview-label { color: #b0bec5; font-size: 11px; }
+
+        .stats-bar {
+            background: #fafafa; border-bottom: 1px solid #eee; padding: 4px 24px;
+            font-size: 11px; color: #666; display: flex; gap: 20px;
+        }
+
+        .mode-toggle {
+            font-size: 11px; background: #fff3e0; color: #e65100; border: 1px solid #ffcc80;
+            padding: 3px 8px; border-radius: 3px; cursor: pointer;
+        }
+        .mode-toggle.active { background: #e65100; color: white; }
+
+        .mark-cb { width: 16px; height: 16px; cursor: pointer; accent-color: #ff8f00; }
+        .marked-row { background: #fff8e1 !important; }
+        .maze-link {
+            color: #1565c0; cursor: pointer; text-decoration: underline;
+            font-weight: 500;
+        }
+        .maze-link:hover { color: #0d47a1; }
+        .unmark-btn {
+            background: #ffecb3; color: #e65100; border: 1px solid #ffcc80;
+            padding: 2px 8px; border-radius: 3px; cursor: pointer; font-size: 11px;
+        }
+        .unmark-btn:hover { background: #e65100; color: white; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>తెలుగు Maze Editor</h1>
+            <div class="subtitle" id="folderInfo"></div>
+        </div>
+        <div class="nav-controls">
+            <button id="prevBtn" onclick="navigate(-1)">◀ Prev</button>
+            <select id="mazeSelect" onchange="loadMaze(this.value)"></select>
+            <button id="nextBtn" onclick="navigate(1)">Next ▶</button>
+            <span id="mazeCounter" style="font-size:12px; opacity:0.8"></span>
+            <button id="markedBtn" onclick="toggleMarkedPage()" style="background:#ff8f00; margin-left:12px">
+                ★ Marked <span id="markedCount" style="font-size:10px"></span>
+            </button>
+        </div>
+    </div>
+
+    <div class="stats-bar">
+        <span id="statsInfo"></span>
+        <span>
+            <label><input type="checkbox" id="teluguMode" checked onchange="toggleTeluguMode()"> Telugu Transliteration</label>
+        </span>
+    </div>
+
+    <div class="container">
+        <div class="maze-image-container">
+            <div class="view-toggle">
+                <button id="gridViewBtn" class="active" onclick="setView('grid')">Grid View</button>
+                <button id="imageViewBtn" onclick="setView('image')">Image View</button>
+            </div>
+            <div id="gridView">
+                <div class="maze-grid-container">
+                    <table class="maze-grid" id="mazeGrid"></table>
+                </div>
+            </div>
+            <div id="imageView" style="display:none">
+                <img id="mazeImage" alt="Maze Image">
+            </div>
+        </div>
+
+        <div class="words-section">
+            <div class="transliteration-hint" id="teluguHint">
+                💡 <strong>Telugu Typing:</strong> Click any cell to edit. Type in English → auto-converts to Telugu.
+                <em>amma</em>→అమ్మ | <em>naanna</em>→నాన్న | <em>telugu</em>→తెలుగు | Press <strong>Esc</strong> to cancel, <strong>Enter</strong> to save.
+            </div>
+            <div class="section-header">
+                <h2>Words / పదాలు</h2>
+                <span class="save-indicator" id="saveStatus"></span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:30px">#</th>
+                        <th style="width:25px">✓</th>
+                        <th style="width:140px">పదం (Word)</th>
+                        <th style="width:140px">Meaning</th>
+                        <th>ఆధారం (Hint)</th>
+                        <th style="width:80px">Alternates</th>
+                    </tr>
+                </thead>
+                <tbody id="wordsBody"></tbody>
+            </table>
+        </div>
+
+        <div class="suggestions-panel" id="suggestionsPanel">
+            <h3 id="sugPanelTitle">Suggestions</h3>
+            <div class="sug-info" id="sugPanelInfo"></div>
+            <div class="suggestions-list" id="suggestionsList"></div>
+        </div>
+    </div>
+
+    <!-- Marked Words Page -->
+    <div id="markedPage" class="container" style="display:none">
+        <div class="words-section">
+            <div class="section-header">
+                <h2>★ Marked Words / గుర్తించిన పదాలు</h2>
+                <span id="markedPageCount" style="color:#666; font-size:12px"></span>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width:30px">#</th>
+                        <th style="width:70px">Maze</th>
+                        <th style="width:30px">W#</th>
+                        <th style="width:50px">Dir</th>
+                        <th style="width:140px">పదం (Word)</th>
+                        <th style="width:140px">Meaning</th>
+                        <th>ఆధారం (Hint)</th>
+                        <th style="width:60px">Unmark</th>
+                    </tr>
+                </thead>
+                <tbody id="markedWordsBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="preview-box" id="previewBox">
+        <span class="preview-label">Telugu: </span><span id="previewText"></span>
+    </div>
+
+    <script>
+    // ==================== Telugu Transliteration Engine ====================
+    const HALANT = '\u0C4D';
+    const VOWEL_MARKS = {
+        'a': '', 'aa': '\u0C3E', 'i': '\u0C3F', 'ii': '\u0C40',
+        'u': '\u0C41', 'uu': '\u0C42', 'e': '\u0C46', 'ee': '\u0C47',
+        'ai': '\u0C48', 'o': '\u0C4A', 'oo': '\u0C4B', 'au': '\u0C4C',
+    };
+    const VOWELS_STANDALONE = {
+        'a': 'అ', 'aa': 'ఆ', 'A': 'ఆ', 'i': 'ఇ', 'ii': 'ఈ', 'I': 'ఈ',
+        'u': 'ఉ', 'uu': 'ఊ', 'U': 'ఊ', 'e': 'ఎ', 'ee': 'ఏ', 'E': 'ఏ',
+        'ai': 'ఐ', 'o': 'ఒ', 'oo': 'ఓ', 'O': 'ఓ', 'au': 'ఔ',
+    };
+    const CONSONANT_MAP = {
+        'k': 'క', 'kh': 'ఖ', 'K': 'ఖ', 'g': 'గ', 'gh': 'ఘ', 'G': 'ఘ',
+        'ng': 'ఙ',
+        'c': 'చ', 'ch': 'చ', 'Ch': 'ఛ', 'C': 'ఛ',
+        'j': 'జ', 'jh': 'ఝ', 'J': 'ఝ', 'nj': 'ఞ',
+        'T': 'ట', 'Th': 'ఠ', 'D': 'డ', 'Dh': 'ఢ', 'N': 'ణ',
+        't': 'త', 'th': 'థ', 'd': 'ద', 'dh': 'ధ', 'n': 'న',
+        'p': 'ప', 'ph': 'ఫ', 'b': 'బ', 'bh': 'భ', 'm': 'మ',
+        'y': 'య', 'r': 'ర', 'l': 'ల', 'L': 'ళ',
+        'v': 'వ', 'w': 'వ',
+        'sh': 'శ', 'Sh': 'ష', 'S': 'ష', 's': 'స',
+        'h': 'హ', 'f': 'ఫ', 'R': 'ఱ', 'x': 'క్ష',
+    };
+
+    function transliterate(input) {
+        let result = '';
+        let i = 0;
+        let lastWasConsonant = false;
+
+        while (i < input.length) {
+            let matched = false;
+
+            // Try vowels (longest first)
+            for (const vlen of [2, 1]) {
+                if (i + vlen > input.length) continue;
+                const chunk = input.substring(i, i + vlen);
+                if (lastWasConsonant && VOWEL_MARKS.hasOwnProperty(chunk)) {
+                    result += VOWEL_MARKS[chunk];
+                    i += vlen; lastWasConsonant = false; matched = true; break;
+                }
+                if (!lastWasConsonant && VOWELS_STANDALONE.hasOwnProperty(chunk)) {
+                    result += VOWELS_STANDALONE[chunk];
+                    i += vlen; lastWasConsonant = false; matched = true; break;
+                }
+            }
+            if (matched) continue;
+
+            // Try consonants (longest first)
+            for (const clen of [2, 1]) {
+                if (i + clen > input.length) continue;
+                const chunk = input.substring(i, i + clen);
+                if (CONSONANT_MAP.hasOwnProperty(chunk)) {
+                    if (lastWasConsonant) result += HALANT;
+                    result += CONSONANT_MAP[chunk];
+                    i += clen; lastWasConsonant = true; matched = true; break;
+                }
+            }
+            if (matched) continue;
+
+            // Anusvara / Visarga — allow after vowel too (e.g. "bhuusaaraM" -> భూసారం)
+            if (input[i] === 'M' && result.length > 0) {
+                result += '\u0C02'; i++; lastWasConsonant = false; continue;
+            }
+            if (input[i] === 'H' && result.length > 0) {
+                result += '\u0C03'; i++; lastWasConsonant = false; continue;
+            }
+
+            // Non-alpha: flush consonant with implicit 'a'
+            if (lastWasConsonant && !/[a-zA-Z]/.test(input[i])) {
+                lastWasConsonant = false;
+            }
+            result += input[i]; i++; lastWasConsonant = false;
+        }
+        return result;
+    }
+
+    // ==================== App State ====================
+    let mazeIds = [];
+    let currentIndex = 0;
+    let currentMazeId = null;
+    let currentWords = [];
+    let teluguModeOn = true;
+    let activeEdit = null; // { idx, field, originalValue }
+    let currentGridData = null; // maze grid cells
+    let currentView = 'grid'; // 'grid' or 'image'
+
+    // ==================== Init ====================
+    async function init() {
+        // Load info
+        const infoRes = await fetch('/api/info');
+        const info = await infoRes.json();
+        document.getElementById('folderInfo').textContent = info.folder;
+        document.getElementById('statsInfo').textContent =
+            `${info.maze_count} mazes | ${info.word_count} words | ${info.dict_size} dictionary | ${info.available_words || 0} available for suggestions`;
+
+        // Load maze list
+        const res = await fetch('/api/mazes');
+        mazeIds = await res.json();
+        const select = document.getElementById('mazeSelect');
+        mazeIds.forEach(id => {
+            const opt = document.createElement('option');
+            opt.value = id; opt.textContent = `Maze ${id}`;
+            select.appendChild(opt);
+        });
+        loadMaze(mazeIds[0]);
+        updateMarkedCount();
+    }
+
+    // ==================== Navigation ====================
+    async function loadMaze(mazeId) {
+        currentMazeId = mazeId;
+        currentIndex = mazeIds.indexOf(mazeId);
+        document.getElementById('mazeSelect').value = mazeId;
+        document.getElementById('mazeCounter').textContent = `${currentIndex + 1}/${mazeIds.length}`;
+        document.getElementById('prevBtn').disabled = currentIndex === 0;
+        document.getElementById('nextBtn').disabled = currentIndex === mazeIds.length - 1;
+
+        // Show maze page, hide marked page
+        document.getElementById('markedPage').style.display = 'none';
+        document.querySelector('.container').style.display = 'block';
+
+        const res = await fetch(`/api/maze/${mazeId}`);
+        const data = await res.json();
+
+        document.getElementById('mazeImage').src = data.image ? `/images/${data.image}` : '';
+        currentWords = data.words;
+
+        // Load marked state before rendering
+        await loadMarkedState(mazeId);
+        renderWords();
+
+        // Load and render grid
+        try {
+            const gridRes = await fetch(`/api/maze_grid/${mazeId}`);
+            if (gridRes.ok) {
+                currentGridData = await gridRes.json();
+                renderGrid();
+            }
+        } catch (e) {
+            currentGridData = null;
+        }
+    }
+
+    function navigate(dir) {
+        const ni = currentIndex + dir;
+        if (ni >= 0 && ni < mazeIds.length) loadMaze(mazeIds[ni]);
+    }
+
+    // ==================== View Toggle ====================
+    function setView(view) {
+        currentView = view;
+        document.getElementById('gridView').style.display = view === 'grid' ? 'block' : 'none';
+        document.getElementById('imageView').style.display = view === 'image' ? 'block' : 'none';
+        document.getElementById('gridViewBtn').className = view === 'grid' ? 'active' : '';
+        document.getElementById('imageViewBtn').className = view === 'image' ? 'active' : '';
+    }
+
+    // ==================== Grid Rendering ====================
+    function renderGrid() {
+        const table = document.getElementById('mazeGrid');
+        if (!currentGridData) {
+            table.innerHTML = '<tr><td colspan="8" style="border:none;color:#999">No grid data</td></tr>';
+            return;
+        }
+
+        const { size, cells, word_positions } = currentGridData;
+
+        // Build a 2D lookup for cells
+        const cellMap = {};
+        cells.forEach(c => { cellMap[`${c.r}_${c.c}`] = c; });
+
+        // Build word number lookup: which cells have a word number?
+        // Collect all numbered cells from word_positions
+        const numberedCells = {};
+        word_positions.forEach(wp => {
+            const key = `${wp.start_row}_${wp.start_col}`;
+            numberedCells[key] = wp.word_num;
+        });
+
+        let html = '';
+        for (let r = 0; r < size; r++) {
+            html += '<tr>';
+            for (let c = 0; c < size; c++) {
+                const cell = cellMap[`${r}_${c}`] || {};
+                const numKey = `${r}_${c}`;
+
+                if (cell.blocker) {
+                    html += '<td class="blocker"></td>';
+                } else {
+                    const num = numberedCells[numKey] !== undefined
+                        ? `<span class="cell-number">${numberedCells[numKey]}</span>` : '';
+                    const letter = cell.value
+                        ? `<span class="cell-letter">${cell.value}</span>` : '';
+                    const conflictClass = cell.conflict ? ' conflict' : '';
+                    html += `<td data-r="${r}" data-c="${c}" class="${conflictClass}"${cell.conflict ? ' title="Intersection conflict"' : ''}>${num}${letter}</td>`;
+                }
+            }
+            html += '</tr>';
+        }
+        table.innerHTML = html;
+    }
+
+    function highlightWordInGrid(wordNum) {
+        // Remove previous highlights
+        document.querySelectorAll('.maze-grid td.highlight').forEach(td => td.classList.remove('highlight'));
+        if (!currentGridData || !wordNum) return;
+
+        // Find all positions for this word number
+        currentGridData.word_positions.forEach(wp => {
+            if (wp.word_num != wordNum) return;
+            for (let i = 0; i < wp.length; i++) {
+                const r = wp.start_row + (wp.direction === 'Down' ? i : 0);
+                const c = wp.start_col + (wp.direction === 'Right' ? i : 0);
+                const td = document.querySelector(`.maze-grid td[data-r="${r}"][data-c="${c}"]`);
+                if (td) td.classList.add('highlight');
+            }
+        });
+    }
+
+    // ==================== Marked Words Tracking ====================
+    let markedState = {};  // "wordnumber_word" -> true
+
+    async function loadMarkedState(mazeId) {
+        try {
+            const res = await fetch(`/api/is_marked?maze_id=${mazeId}`);
+            markedState = await res.json();
+        } catch(e) { markedState = {}; }
+    }
+
+    async function toggleMark(idx) {
+        const entry = currentWords[idx];
+        const cb = document.getElementById(`mark_${idx}`);
+        const key = `${entry.wordnumber}_${entry.word}`;
+        try {
+            const res = await fetch('/api/toggle_mark', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    maze_id: currentMazeId,
+                    wordnumber: entry.wordnumber,
+                    word: entry.word
+                })
+            });
+            const data = await res.json();
+            if (data.marked) {
+                markedState[key] = true;
+                cb.closest('tr').classList.add('marked-row');
+            } else {
+                delete markedState[key];
+                cb.closest('tr').classList.remove('marked-row');
+            }
+            cb.checked = data.marked;
+            updateMarkedCount();
+        } catch(e) {
+            cb.checked = !cb.checked;
+        }
+    }
+
+    async function updateMarkedCount() {
+        try {
+            const res = await fetch('/api/marked_words');
+            const data = await res.json();
+            const badge = document.getElementById('markedCount');
+            badge.textContent = data.count > 0 ? `(${data.count})` : '';
+        } catch(e) {}
+    }
+
+    // ==================== Render ====================
+    function renderWords() {
+        const tbody = document.getElementById('wordsBody');
+        tbody.innerHTML = '';
+
+        currentWords.forEach((entry, idx) => {
+            const tr = document.createElement('tr');
+            const key = `${entry.wordnumber}_${entry.word}`;
+            const isMarked = markedState[key] || false;
+            if (isMarked) tr.classList.add('marked-row');
+            tr.addEventListener('mouseenter', () => highlightWordInGrid(entry.wordnumber));
+            tr.addEventListener('mouseleave', () => highlightWordInGrid(null));
+            tr.innerHTML = `
+                <td>${entry.wordnumber}</td>
+                <td><input type="checkbox" class="mark-cb" id="mark_${idx}"
+                     ${isMarked ? 'checked' : ''}
+                     onchange="toggleMark(${idx})" title="Mark this word"></td>
+                <td>
+                    <div class="edit-container">
+                        <span class="editable word-cell" id="word_${idx}"
+                              onclick="startEdit(${idx}, 'word')">${entry.word}</span>
+                        <div class="match-warning" id="warning_${idx}"></div>
+                    </div>
+                </td>
+                <td>
+                    <span class="editable" id="meaning_${idx}"
+                          onclick="startEdit(${idx}, 'meaning')">${entry.meaning || '—'}</span>
+                </td>
+                <td>
+                    <span class="editable" id="hint_${idx}"
+                          onclick="startEdit(${idx}, 'hint')">${entry.hint || '—'}</span>
+                </td>
+                <td style="text-align:center">
+                    <span class="alt-badge" id="altBadge_${idx}"
+                          onclick="showAlternates(${idx})"
+                          title="${entry.syllables} letters, ${entry.direction || '?'}">
+                        ${entry.direction === 'Right' ? '→' : entry.direction === 'Down' ? '↓' : '?'} <small>(${entry.syllables}L)</small>
+                    </span>
+                    <span class="pair-badge" id="pairBadge_${idx}"
+                          onclick="togglePairSelect(${idx})"
+                          title="Pair alternates — pick this word, then a crossing word">🔗</span>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    // ==================== Editing ====================
+    let suggestDebounce = null;
+
+    function startEdit(idx, field) {
+        if (activeEdit) finishEdit(true);
+
+        const span = document.getElementById(`${field}_${idx}`);
+        const currentVal = currentWords[idx][field] || '';
+        const container = span.parentElement;
+
+        const input = document.createElement('input');
+        input.className = 'edit-input';
+        input.value = (field === 'word' && teluguModeOn) ? '' : currentVal;
+        if (field === 'word' && teluguModeOn) {
+            input.placeholder = 'Type English → Telugu...';
+            input.className += ' telugu-mode';
+        }
+
+        input.addEventListener('input', () => onEditInput(idx, field, input));
+        input.addEventListener('keydown', (e) => onEditKeydown(e, idx, field, input));
+        input.addEventListener('blur', () => setTimeout(() => finishEdit(false), 200));
+
+        span.style.display = 'none';
+        container.insertBefore(input, span.nextSibling);
+        input.focus();
+
+        activeEdit = { idx, field, originalValue: currentVal, input, span };
+
+        if (field === 'word') {
+            if (teluguModeOn) {
+                document.getElementById('previewBox').classList.add('show');
+                document.getElementById('previewText').textContent = currentVal;
+            }
+            // Show suggestions panel for this word
+            loadSuggestions(currentVal, '', idx);
+        } else {
+            hideSuggestions();
+        }
+    }
+
+    function onEditInput(idx, field, input) {
+        if (field === 'word' && teluguModeOn) {
+            const telugu = transliterate(input.value);
+            document.getElementById('previewText').textContent = telugu || activeEdit.originalValue;
+
+            if (telugu.length > 1) checkWord(telugu, idx);
+
+            // Update suggestions as user types
+            clearTimeout(suggestDebounce);
+            suggestDebounce = setTimeout(() => {
+                loadSuggestions(activeEdit.originalValue, telugu, idx);
+            }, 150);
+        }
+    }
+
+    async function loadSuggestions(currentWord, prefix, editIdx) {
+        try {
+            const params = new URLSearchParams({ current: currentWord });
+            if (prefix) params.append('prefix', prefix);
+            const res = await fetch(`/api/suggest?${params}`);
+            const words = await res.json();
+
+            const panel = document.getElementById('suggestionsPanel');
+            const title = document.getElementById('sugPanelTitle');
+            const info = document.getElementById('sugPanelInfo');
+            const list = document.getElementById('suggestionsList');
+
+            title.textContent = `Suggestions for: ${currentWord}`;
+            info.textContent = `${words.length} available words with same letter count, starting with same letter`;
+            list.innerHTML = '';
+
+            if (words.length > 0) {
+                words.forEach(w => {
+                    const chip = document.createElement('span');
+                    chip.className = 'sug-word';
+                    chip.textContent = w;
+                    chip.addEventListener('mousedown', (e) => {
+                        e.preventDefault();
+                        selectSuggestion(w, editIdx);
+                    });
+                    list.appendChild(chip);
+                });
+                panel.classList.add('show');
+            } else {
+                info.textContent = 'No matching available words found';
+                panel.classList.add('show');
+            }
+        } catch (e) {}
+    }
+
+    function hideSuggestions() {
+        document.getElementById('suggestionsPanel').classList.remove('show');
+        // Remove active badge highlight
+        document.querySelectorAll('.alt-badge.active').forEach(b => b.classList.remove('active'));
+        // Also clear any in-progress pair selection
+        if (typeof clearPairSelection === 'function') clearPairSelection();
+    }
+
+    async function showAlternates(idx) {
+        const entry = currentWords[idx];
+        const word = entry.word;
+        const wordNum = entry.wordnumber;
+        const direction = entry.direction || '';
+        const badge = document.getElementById(`altBadge_${idx}`);
+
+        // Toggle off if clicking same word
+        const panel = document.getElementById('suggestionsPanel');
+        if (panel.classList.contains('show') && panel.dataset.activeIdx == idx) {
+            hideSuggestions();
+            return;
+        }
+
+        // Highlight active badge
+        document.querySelectorAll('.alt-badge.active').forEach(b => b.classList.remove('active'));
+        badge.classList.add('active');
+
+        try {
+            const encoded = encodeURIComponent(word);
+            const params = new URLSearchParams({
+                maze_id: currentMazeId,
+                word_num: wordNum,
+                direction: direction
+            });
+            const res = await fetch(`/api/alternates/${encoded}?${params}`);
+            const data = await res.json();
+
+            const title = document.getElementById('sugPanelTitle');
+            const info = document.getElementById('sugPanelInfo');
+            const list = document.getElementById('suggestionsList');
+
+            let infoText = `${data.count} fitting words with ${data.syllables} letters`;
+            if (data.constraints && data.constraints.length > 0) {
+                const cParts = data.constraints.map(c => `pos ${c.pos+1}="${c.letter}"`);
+                infoText += ` (must match: ${cParts.join(', ')})`;
+            }
+            infoText += ' — click to replace';
+            title.textContent = `Alternates for: ${word} (${direction || '?'})`;
+            info.textContent = infoText;
+            list.innerHTML = '';
+            panel.dataset.activeIdx = idx;
+
+            data.alternates.forEach(item => {
+                const chip = document.createElement('span');
+                chip.className = 'sug-word';
+                // item is {word, label, fwd, rev} for maze-aware, or plain string for fallback
+                const actualWord = item.word || item;
+                const label = item.label || item;
+                chip.textContent = label;
+                if (item.rev && !item.fwd) {
+                    chip.style.color = '#c060c0';
+                    chip.title = 'Fits reversed only';
+                } else if (item.rev && item.fwd) {
+                    chip.title = 'Fits forward and reversed';
+                }
+                chip.addEventListener('click', () => {
+                    replaceWord(idx, word, actualWord);
+                });
+                list.appendChild(chip);
+            });
+
+            panel.classList.add('show');
+            panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } catch (e) {}
+    }
+
+    async function replaceWord(idx, oldWord, newWord) {
+        showSaveStatus('saving');
+        try {
+            const res = await fetch('/api/update_word', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ maze_id: currentMazeId, old_word: oldWord, new_word: newWord })
+            });
+            const data = await res.json();
+
+            // Update display
+            currentWords[idx].word = newWord;
+            const span = document.getElementById(`word_${idx}`);
+            if (span) span.textContent = newWord;
+
+            // Show cross-maze warning
+            if (data.found_in_mazes && data.found_in_mazes.length > 0) {
+                const w = document.getElementById(`warning_${idx}`);
+                if (w) {
+                    w.textContent = `⚠️ Also in Maze(s): ${data.found_in_mazes.join(', ')}`;
+                    w.classList.add('show');
+                }
+            }
+
+            hideSuggestions();
+            showSaveStatus('saved');
+
+            // Reload maze to refresh alternate counts
+            await loadMaze(currentMazeId);
+        } catch (e) {
+            showSaveStatus('error');
+        }
+    }
+
+    // ==================== Pair Alternates (v8) ====================
+    let pairFirst = null;       // {idx, word_num, direction, word}
+    let pairCrossings = null;   // cached crossings for the first selection
+
+    function togglePairSelect(idx) {
+        const entry = currentWords[idx];
+        if (!entry) return;
+        const wn = String(entry.wordnumber);
+        const dir = entry.direction || '';
+        if (!dir) { alert('No direction info for this word — cannot pair.'); return; }
+
+        // Cancel if clicking the same first selection
+        if (pairFirst && pairFirst.idx === idx) {
+            clearPairSelection();
+            hideSuggestions();
+            return;
+        }
+
+        if (!pairFirst) {
+            pairFirst = { idx, word_num: wn, direction: dir, word: entry.word };
+            const badge = document.getElementById(`pairBadge_${idx}`);
+            badge.classList.add('first');
+            // Fetch crossings to highlight eligible second picks
+            const params = new URLSearchParams({ maze_id: currentMazeId, word_num: wn, direction: dir });
+            fetch(`/api/crossings?${params}`).then(r => r.json()).then(data => {
+                pairCrossings = data.crossings || [];
+                highlightEligibleCrossings();
+                showPairHint(`Selected <b>${entry.word}</b> (#${wn} ${dir}). Click 🔗 on a crossing word — ${data.count} eligible.`);
+            }).catch(() => {});
+            return;
+        }
+
+        // Second selection
+        if (!isEligibleCrossing(wn, dir)) {
+            alert('That word does not cross the first one. Pick one of the highlighted 🔗 badges, or click the same first one to cancel.');
+            return;
+        }
+
+        const second = { idx, word_num: wn, direction: dir, word: entry.word };
+        document.getElementById(`pairBadge_${idx}`).classList.add('second');
+        loadPairAlternates(pairFirst, second);
+    }
+
+    function clearPairSelection() {
+        document.querySelectorAll('.pair-badge').forEach(b => {
+            b.classList.remove('first', 'second', 'eligible');
+        });
+        pairFirst = null;
+        pairCrossings = null;
+    }
+
+    function isEligibleCrossing(wn, dir) {
+        if (!pairCrossings) return false;
+        return pairCrossings.some(c => String(c.word_num) === String(wn) && c.direction === dir);
+    }
+
+    function highlightEligibleCrossings() {
+        if (!pairCrossings) return;
+        const eligibleSet = new Set(pairCrossings.map(c => `${c.word_num}|${c.direction}`));
+        currentWords.forEach((w, i) => {
+            const key = `${w.wordnumber}|${w.direction}`;
+            if (eligibleSet.has(key)) {
+                const b = document.getElementById(`pairBadge_${i}`);
+                if (b && !b.classList.contains('first')) b.classList.add('eligible');
+            }
+        });
+    }
+
+    function showPairHint(html) {
+        const panel = document.getElementById('suggestionsPanel');
+        const title = document.getElementById('sugPanelTitle');
+        const info = document.getElementById('sugPanelInfo');
+        const list = document.getElementById('suggestionsList');
+        title.textContent = 'Pair Alternates';
+        info.innerHTML = `<div class="pair-mode-hint">${html}</div>`;
+        list.innerHTML = '';
+        panel.classList.add('show');
+    }
+
+    async function loadPairAlternates(first, second) {
+        const params = new URLSearchParams({
+            maze_id: currentMazeId,
+            w1_num: first.word_num, w1_dir: first.direction,
+            w2_num: second.word_num, w2_dir: second.direction,
+        });
+        showPairHint(`Computing pairs for <b>${first.word}</b> × <b>${second.word}</b>...`);
+        try {
+            const res = await fetch(`/api/pair_alternates?${params}`);
+            const data = await res.json();
+            if (data.error) {
+                showPairHint(`Error: ${data.error}`);
+                return;
+            }
+            renderPairAlternates(data, first, second);
+        } catch (e) {
+            showPairHint('Network error fetching pair alternates.');
+        }
+    }
+
+    function renderPairAlternates(data, first, second) {
+        const title = document.getElementById('sugPanelTitle');
+        const info = document.getElementById('sugPanelInfo');
+        const list = document.getElementById('suggestionsList');
+
+        title.textContent = `Pair Alternates: ${first.word} × ${second.word}`;
+        const c1 = data.w1.constraints.map(c => `pos${c.pos+1}=${c.letter}`).join(', ') || 'none';
+        const c2 = data.w2.constraints.map(c => `pos${c.pos+1}=${c.letter}`).join(', ') || 'none';
+        const trunc = data.truncated ? ' (truncated)' : '';
+        info.innerHTML =
+          `<div class="pair-mode-hint">` +
+          `<b>${data.pair_count}</b> compatible pair(s)${trunc} — click a row to replace BOTH words. ` +
+          `<button onclick="cancelPairMode()" style="margin-left:8px">Cancel</button><br>` +
+          `<small>${first.word} (#${first.word_num} ${first.direction}, fits=${data.w1.fit_count}, must match ${c1}) ` +
+          `× ${second.word} (#${second.word_num} ${second.direction}, fits=${data.w2.fit_count}, must match ${c2})` +
+          ` — intersection at row ${data.intersection.row}, col ${data.intersection.col}` +
+          `</small></div>`;
+
+        list.innerHTML = '';
+        list.style.display = 'block';
+        if (data.pair_count === 0) {
+            list.innerHTML = '<div style="color:#999;padding:12px">No compatible pairs found.</div>';
+            return;
+        }
+        data.pairs.forEach(p => {
+            const row = document.createElement('div');
+            row.className = 'pair-row';
+            row.innerHTML =
+                `<span class="w ${p.w1_orient === 'rev' ? 'rev' : ''}">${p.w1}${p.w1_orient === 'rev' ? ' ⟲' : ''}</span>` +
+                `<span class="arr">×</span>` +
+                `<span class="w ${p.w2_orient === 'rev' ? 'rev' : ''}">${p.w2}${p.w2_orient === 'rev' ? ' ⟲' : ''}</span>` +
+                `<span class="syl">[${p.syllable}]</span>`;
+            row.addEventListener('click', () => applyPairReplacement(first, second, p));
+            list.appendChild(row);
+        });
+    }
+
+    async function applyPairReplacement(first, second, pair) {
+        if (!confirm(`Replace ${first.word} → ${pair.w1} AND ${second.word} → ${pair.w2}?`)) return;
+        showSaveStatus('saving');
+        try {
+            const res = await fetch('/api/update_word_pair', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    maze_id: currentMazeId,
+                    replacements: [
+                        { old: first.word,  new: pair.w1 },
+                        { old: second.word, new: pair.w2 },
+                    ],
+                }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showSaveStatus('saved');
+            } else {
+                showSaveStatus('error');
+            }
+            cancelPairMode();
+            await loadMaze(currentMazeId);
+        } catch (e) {
+            showSaveStatus('error');
+        }
+    }
+
+    function cancelPairMode() {
+        clearPairSelection();
+        hideSuggestions();
+    }
+
+    function selectSuggestion(word, idx) {
+        if (!activeEdit || activeEdit.idx !== idx) return;
+        const { field, originalValue, input, span } = activeEdit;
+        activeEdit = null;
+
+        input.remove();
+        span.style.display = 'inline';
+        span.textContent = word;
+        currentWords[idx][field] = word;
+        document.getElementById('previewBox').classList.remove('show');
+        hideSuggestions();
+
+        // Save to server
+        showSaveStatus('saving');
+        fetch('/api/update_word', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ maze_id: currentMazeId, old_word: originalValue, new_word: word })
+        }).then(res => res.json()).then(data => {
+            if (data.found_in_mazes && data.found_in_mazes.length > 0) {
+                const w = document.getElementById(`warning_${idx}`);
+                if (w) {
+                    w.textContent = `⚠️ Also in Maze(s): ${data.found_in_mazes.join(', ')}`;
+                    w.classList.add('show');
+                }
+            }
+            showSaveStatus('saved');
+            // Refresh grid
+            fetch(`/api/maze_grid/${currentMazeId}`).then(r => r.json()).then(g => {
+                currentGridData = g; renderGrid();
+            }).catch(() => {});
+        }).catch(() => showSaveStatus('error'));
+    }
+
+    function onEditKeydown(e, idx, field, input) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            finishEdit(false);
+        }
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            cancelEdit();
+        }
+    }
+
+    async function finishEdit(silent) {
+        if (!activeEdit) return;
+        const { idx, field, originalValue, input, span } = activeEdit;
+        activeEdit = null;
+
+        let newValue;
+        if (field === 'word' && teluguModeOn) {
+            newValue = transliterate(input.value);
+            if (!newValue.trim()) newValue = originalValue;
+        } else {
+            newValue = input.value.trim() || originalValue;
+        }
+
+        input.remove();
+        span.style.display = 'inline';
+        document.getElementById('previewBox').classList.remove('show');
+        hideSuggestions();
+
+        if (newValue === originalValue) return;
+
+        span.textContent = newValue;
+        currentWords[idx][field] = newValue;
+
+        showSaveStatus('saving');
+        try {
+            if (field === 'word') {
+                const res = await fetch('/api/update_word', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ maze_id: currentMazeId, old_word: originalValue, new_word: newValue })
+                });
+                const data = await res.json();
+                if (data.found_in_mazes && data.found_in_mazes.length > 0) {
+                    const w = document.getElementById(`warning_${idx}`);
+                    w.textContent = `⚠️ Also in Maze(s): ${data.found_in_mazes.join(', ')}`;
+                    w.classList.add('show');
+                }
+                // Refresh grid to reflect word change
+                try {
+                    const gridRes = await fetch(`/api/maze_grid/${currentMazeId}`);
+                    if (gridRes.ok) {
+                        currentGridData = await gridRes.json();
+                        renderGrid();
+                    }
+                } catch (e) {}
+            } else if (field === 'meaning') {
+                await fetch('/api/update_meaning', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ word: currentWords[idx].word, meaning: newValue })
+                });
+            } else if (field === 'hint') {
+                await fetch('/api/update_hint', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ word: currentWords[idx].word, hint_tel: newValue })
+                });
+            }
+            showSaveStatus('saved');
+        } catch (e) {
+            showSaveStatus('error');
+        }
+    }
+
+    function cancelEdit() {
+        if (!activeEdit) return;
+        const { span, input } = activeEdit;
+        activeEdit = null;
+        input.remove();
+        span.style.display = 'inline';
+        document.getElementById('previewBox').classList.remove('show');
+        hideSuggestions();
+    }
+
+    function showSaveStatus(status) {
+        const el = document.getElementById('saveStatus');
+        el.className = 'save-indicator ' + status;
+        el.textContent = status === 'saved' ? '✓ Saved' : status === 'saving' ? 'Saving...' : '✗ Error';
+        if (status === 'saved') setTimeout(() => { el.className = 'save-indicator'; }, 2000);
+    }
+
+    async function checkWord(word, idx) {
+        try {
+            const res = await fetch(`/api/check_word/${encodeURIComponent(word)}/${currentMazeId}`);
+            const data = await res.json();
+            const warning = document.getElementById(`warning_${idx}`);
+            if (data.found_in_mazes && data.found_in_mazes.length > 0) {
+                warning.textContent = `⚠️ Also in Maze(s): ${data.found_in_mazes.join(', ')}`;
+                warning.classList.add('show');
+            } else {
+                warning.classList.remove('show');
+            }
+        } catch (e) {}
+    }
+
+    function toggleTeluguMode() {
+        teluguModeOn = document.getElementById('teluguMode').checked;
+        document.getElementById('teluguHint').style.display = teluguModeOn ? 'block' : 'none';
+    }
+
+    // Keyboard nav (when not editing)
+    document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT') return;
+        if (e.key === 'ArrowLeft') navigate(-1);
+        if (e.key === 'ArrowRight') navigate(1);
+    });
+
+    // ==================== Marked Words Page ====================
+    let markedPageVisible = false;
+
+    async function toggleMarkedPage() {
+        markedPageVisible = !markedPageVisible;
+        const mazeContainer = document.querySelector('.container');
+        const markedPage = document.getElementById('markedPage');
+        const btn = document.getElementById('markedBtn');
+
+        if (markedPageVisible) {
+            mazeContainer.style.display = 'none';
+            markedPage.style.display = 'block';
+            btn.style.background = '#e65100';
+            btn.innerHTML = '← Back to Mazes';
+            await renderMarkedPage();
+        } else {
+            markedPage.style.display = 'none';
+            mazeContainer.style.display = 'block';
+            btn.style.background = '#ff8f00';
+            const countSpan = document.getElementById('markedCount');
+            btn.innerHTML = `★ Marked <span id="markedCount" style="font-size:10px">${countSpan ? countSpan.textContent : ''}</span>`;
+            updateMarkedCount();
+        }
+    }
+
+    async function renderMarkedPage() {
+        const res = await fetch('/api/marked_words');
+        const data = await res.json();
+        const tbody = document.getElementById('markedWordsBody');
+        const countEl = document.getElementById('markedPageCount');
+        countEl.textContent = `${data.count} word${data.count !== 1 ? 's' : ''} marked`;
+
+        if (data.count === 0) {
+            tbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color:#999; padding:20px">No words marked yet. Use the checkboxes in the word table to mark words.</td></tr>';
+            return;
+        }
+
+        tbody.innerHTML = '';
+        data.words.forEach((w, i) => {
+            const tr = document.createElement('tr');
+            const dirIcon = w.direction === 'Right' ? '→' : w.direction === 'Down' ? '↓' : '';
+            tr.innerHTML = `
+                <td>${i + 1}</td>
+                <td><span class="maze-link" onclick="goToMaze('${w.maze_id}')">Maze ${w.maze_id}</span></td>
+                <td>${w.wordnumber}</td>
+                <td>${dirIcon} ${w.direction}</td>
+                <td style="font-family:'Noto Sans Telugu','Gautami',sans-serif; font-size:14px; font-weight:500">${w.word}</td>
+                <td>${w.meaning || '—'}</td>
+                <td>${w.hint || '—'}</td>
+                <td><button class="unmark-btn" onclick="unmarkFromPage('${w.maze_id}','${w.wordnumber}','${w.word}', this)">✕</button></td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function goToMaze(mazeId) {
+        markedPageVisible = false;
+        document.getElementById('markedPage').style.display = 'none';
+        document.querySelector('.container').style.display = 'block';
+        const btn = document.getElementById('markedBtn');
+        btn.style.background = '#ff8f00';
+        btn.innerHTML = `★ Marked <span id="markedCount" style="font-size:10px"></span>`;
+        loadMaze(mazeId);
+        updateMarkedCount();
+    }
+
+    async function unmarkFromPage(mazeId, wordnumber, word, btn) {
+        await fetch('/api/toggle_mark', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ maze_id: mazeId, wordnumber: wordnumber, word: word })
+        });
+        btn.closest('tr').remove();
+        updateMarkedCount();
+        // Update count on page
+        const res = await fetch('/api/marked_words');
+        const data = await res.json();
+        document.getElementById('markedPageCount').textContent =
+            `${data.count} word${data.count !== 1 ? 's' : ''} marked`;
+        if (data.count === 0) {
+            document.getElementById('markedWordsBody').innerHTML =
+                '<tr><td colspan="8" style="text-align:center; color:#999; padding:20px">No words marked.</td></tr>';
+        }
+    }
+
+    init();
+    </script>
+</body>
+</html>
