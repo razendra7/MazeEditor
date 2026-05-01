@@ -829,32 +829,117 @@ class PuzzleData:
         first = self._first_base_char(word)
         self.available_by_length.setdefault(slen, {}).setdefault(first, []).append(word)
 
-    def update_word(self, maze_id, old_word, new_word):
+    def update_word(self, maze_id, old_word, new_word, wordnumber=None, direction=None, orient=None):
         """Update a word in a maze and save to CSV.
-        Also swaps the words in the available pool."""
+
+        If wordnumber+direction+orient are provided, the slot's is_reverse flag in
+        mazesData.csv is flipped when the chosen orientation does not match the
+        slot's current is_reverse. This is what makes a "reverse-only" candidate
+        actually display in reverse instead of being placed forward.
+        """
         entries = self.words_by_maze.get(maze_id, [])
         updated = False
         updated_wordnum = None
         for entry in entries:
             if entry["word"] == old_word:
+                if wordnumber is not None and str(entry["wordnumber"]) != str(wordnumber):
+                    continue
                 entry["word"] = new_word
                 updated_wordnum = entry["wordnumber"]
                 updated = True
                 break
 
-        if updated:
-            # Track this word as edited so grid rendering gives it priority
-            self.edited_words.add((maze_id, updated_wordnum))
-            self._save_edited_words()
-            self._save_words_csv()
-            self._build_word_index()
-            # Remove new_word from available pool (it's now in a maze)
-            self._remove_from_available(new_word)
-            # Add old_word back to available pool (no longer in any maze)
-            # But only if it's not used in another maze
-            if old_word not in self.word_to_mazes or len(self.word_to_mazes[old_word]) == 0:
-                self._add_to_available(old_word)
-        return updated
+        if not updated:
+            return False
+
+        # Mirror the change into mazesData positions so the grid renderer
+        # picks up the right is_reverse flag and fullword.
+        positions = self.maze_positions.get(maze_id, [])
+        target_pos = None
+        if wordnumber is not None and direction:
+            for pos in positions:
+                if (str(pos["wordnumber"]) == str(wordnumber)
+                        and pos["direction"] == direction
+                        and pos["fullword"] == old_word):
+                    target_pos = pos; break
+            if target_pos is None:
+                for pos in positions:
+                    if str(pos["wordnumber"]) == str(wordnumber) and pos["direction"] == direction:
+                        target_pos = pos; break
+        else:
+            # legacy single-word path: match by old fullword
+            for pos in positions:
+                if pos["fullword"] == old_word:
+                    target_pos = pos; break
+
+        mazes_data_dirty = False
+        if target_pos is not None:
+            if target_pos["fullword"] != new_word:
+                target_pos["fullword"] = new_word
+                mazes_data_dirty = True
+            if orient in ("fwd", "rev"):
+                desired_reverse = (orient == "rev")
+                if target_pos["is_reverse"] != desired_reverse:
+                    target_pos["is_reverse"] = desired_reverse
+                    mazes_data_dirty = True
+
+        # Track this word as edited so grid rendering gives it priority
+        self.edited_words.add((maze_id, updated_wordnum))
+        self._save_edited_words()
+        self._save_words_csv()
+        if mazes_data_dirty:
+            self._save_mazes_data_csv()
+        self._build_word_index()
+        # Remove new_word from available pool (it's now in a maze)
+        self._remove_from_available(new_word)
+        # Add old_word back to available pool (no longer in any maze)
+        if old_word not in self.word_to_mazes or len(self.word_to_mazes[old_word]) == 0:
+            self._add_to_available(old_word)
+        return True
+
+    def _save_mazes_data_csv(self):
+        """Write current self.maze_positions back to mazesData.csv (with backup).
+        Preserves all columns; only fullword and isreverse are mutated when
+        positions are matched by (mazeid, wordnumber, direction, startrow, startcolumn).
+        """
+        if not os.path.exists(self.mazes_data_csv):
+            return
+        backup_dir = os.path.join(self.puzzle_dir, "backups")
+        os.makedirs(backup_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join(backup_dir, f"mazesData_{timestamp}.csv")
+        shutil.copy2(self.mazes_data_csv, backup_path)
+
+        with open(self.mazes_data_csv, "r", encoding="utf-8-sig", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader)
+            rows = [r for r in reader]
+
+        idx = {c: header.index(c) for c in header}
+
+        for row in rows:
+            mid = row[idx["mazeid"]].strip()
+            wnum = row[idx["wordnumber"]].strip()
+            direction = row[idx["direction"]].strip()
+            try:
+                startrow = int(row[idx["startrow"]].strip())
+                startcol = int(row[idx["startcolumn"]].strip())
+            except ValueError:
+                continue
+            for pos in self.maze_positions.get(mid, []):
+                if (str(pos["wordnumber"]) == wnum
+                        and pos["direction"] == direction
+                        and pos["start_row"] == startrow
+                        and pos["start_col"] == startcol):
+                    row[idx["fullword"]] = pos["fullword"]
+                    row[idx["isreverse"]] = "1" if pos["is_reverse"] else "0"
+                    break
+
+        with open(self.mazes_data_csv, "w", encoding="utf-8-sig", newline="") as f:
+            writer = csv.writer(f, quoting=csv.QUOTE_ALL)
+            writer.writerow(header)
+            for r in rows:
+                writer.writerow(r)
 
     def update_hint(self, word, hint_tel, hint_eng=None):
         """Update hints for a word in the dictionary and save."""
@@ -1061,16 +1146,22 @@ def check_word(word, current_maze):
 
 @app.route("/api/update_word", methods=["POST"])
 def update_word():
-    """Update a word in a maze and persist to CSV."""
+    """Update a word in a maze and persist to CSV.
+    Optional: wordnumber, direction, orient ('fwd'|'rev') to control reverse flag.
+    """
     body = request.get_json()
     maze_id = body.get("maze_id")
     old_word = body.get("old_word")
     new_word = body.get("new_word")
+    wordnumber = body.get("wordnumber")
+    direction = body.get("direction")
+    orient = body.get("orient")
 
     if not all([maze_id, old_word, new_word]):
         return jsonify({"error": "Missing fields"}), 400
 
-    success = DATA.update_word(maze_id, old_word, new_word)
+    success = DATA.update_word(maze_id, old_word, new_word,
+                               wordnumber=wordnumber, direction=direction, orient=orient)
 
     # Check cross-maze matches for the new word
     other_mazes = sorted(
@@ -1161,15 +1252,23 @@ def pair_alternates():
 
 @app.route("/api/update_word_pair", methods=["POST"])
 def update_word_pair():
-    """Apply a pair of word replacements atomically (best-effort: sequential)."""
+    """Apply a pair of word replacements atomically (best-effort: sequential).
+    Each replacement may include wordnumber, direction, orient ('fwd'|'rev')
+    to control the slot's is_reverse flag.
+    """
     body = request.get_json()
     maze_id = body.get("maze_id")
-    pairs = body.get("replacements", [])  # [{old, new}, {old, new}]
+    pairs = body.get("replacements", [])  # [{old, new, wordnumber?, direction?, orient?}, ...]
     if not maze_id or len(pairs) != 2:
         return jsonify({"error": "expected maze_id + 2 replacements"}), 400
     results = []
     for p in pairs:
-        ok = DATA.update_word(maze_id, p.get("old"), p.get("new"))
+        ok = DATA.update_word(
+            maze_id, p.get("old"), p.get("new"),
+            wordnumber=p.get("wordnumber"),
+            direction=p.get("direction"),
+            orient=p.get("orient"),
+        )
         results.append({"old": p.get("old"), "new": p.get("new"), "success": ok})
     return jsonify({"success": all(r["success"] for r in results), "results": results})
 

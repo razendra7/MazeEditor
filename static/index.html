@@ -790,7 +790,10 @@
                     chip.title = 'Fits forward and reversed';
                 }
                 chip.addEventListener('click', () => {
-                    replaceWord(idx, word, actualWord);
+                    // Determine orientation: prefer fwd if both fit, else rev-only
+                    let orient = 'fwd';
+                    if (item.rev && !item.fwd) orient = 'rev';
+                    replaceWord(idx, word, actualWord, orient);
                 });
                 list.appendChild(chip);
             });
@@ -800,12 +803,20 @@
         } catch (e) {}
     }
 
-    async function replaceWord(idx, oldWord, newWord) {
+    async function replaceWord(idx, oldWord, newWord, orient) {
         showSaveStatus('saving');
+        const entry = currentWords[idx] || {};
         try {
             const res = await fetch('/api/update_word', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ maze_id: currentMazeId, old_word: oldWord, new_word: newWord })
+                body: JSON.stringify({
+                    maze_id: currentMazeId,
+                    old_word: oldWord,
+                    new_word: newWord,
+                    wordnumber: entry.wordnumber,
+                    direction: entry.direction,
+                    orient: orient || 'fwd',
+                })
             });
             const data = await res.json();
 
@@ -958,8 +969,8 @@
             list.innerHTML = '<div style="color:#999;padding:12px">No compatible pairs found.</div>';
             return;
         }
-        const origW1 = { word: data.w1.word };
-        const origW2 = { word: data.w2.word };
+        const w1Info = { word: data.w1.word, num: data.w1.word_num, dir: data.w1.direction };
+        const w2Info = { word: data.w2.word, num: data.w2.word_num, dir: data.w2.direction };
         data.pairs.forEach(p => {
             const row = document.createElement('div');
             row.className = 'pair-row';
@@ -968,13 +979,13 @@
                 `<span class="arr">×</span>` +
                 `<span class="w ${p.w2_orient === 'rev' ? 'rev' : ''}">${p.w2}${p.w2_orient === 'rev' ? ' ⟲' : ''}</span>` +
                 `<span class="syl">[${p.syllable}]</span>`;
-            row.addEventListener('click', () => applyPairReplacement(origW1.word, origW2.word, p));
+            row.addEventListener('click', () => applyPairReplacement(w1Info, w2Info, p));
             list.appendChild(row);
         });
     }
 
-    async function applyPairReplacement(oldW1, oldW2, pair) {
-        if (!confirm(`Replace ${oldW1} → ${pair.w1} AND ${oldW2} → ${pair.w2}?`)) return;
+    async function applyPairReplacement(w1Info, w2Info, pair) {
+        if (!confirm(`Replace ${w1Info.word} → ${pair.w1} AND ${w2Info.word} → ${pair.w2}?`)) return;
         showSaveStatus('saving');
         try {
             const res = await fetch('/api/update_word_pair', {
@@ -982,8 +993,8 @@
                 body: JSON.stringify({
                     maze_id: currentMazeId,
                     replacements: [
-                        { old: oldW1, new: pair.w1 },
-                        { old: oldW2, new: pair.w2 },
+                        { old: w1Info.word, new: pair.w1, wordnumber: w1Info.num, direction: w1Info.dir, orient: pair.w1_orient },
+                        { old: w2Info.word, new: pair.w2, wordnumber: w2Info.num, direction: w2Info.dir, orient: pair.w2_orient },
                     ],
                 }),
             });
