@@ -152,12 +152,15 @@ class PuzzleData:
                     {"word": word, "wordnumber": wnum}
                 )
         # Deduplicate per maze, preserving order
+        # Key by (word, wordnumber) so multiple empty slots (one per wordnumber)
+        # are preserved.
         for mid in self.words_by_maze:
             seen = set()
             unique = []
             for entry in self.words_by_maze[mid]:
-                if entry["word"] not in seen:
-                    seen.add(entry["word"])
+                key = (entry["word"], entry["wordnumber"])
+                if key not in seen:
+                    seen.add(key)
                     unique.append(entry)
             self.words_by_maze[mid] = unique
 
@@ -897,6 +900,83 @@ class PuzzleData:
             self._add_to_available(old_word)
         return True
 
+    def delete_word(self, maze_id, wordnumber, direction):
+        """Mark a word slot as empty (delete the word from this maze).
+
+        - SelectedWords.csv: the matching entry's fullword becomes "" (slot kept)
+        - mazesData.csv: the matching position's fullword becomes "" (geometry kept)
+        - Removes the word from this maze in word_to_mazes; if the word is no
+          longer used in any maze, it goes back into the available pool.
+        Returns the deleted word, or None if no slot matched.
+        """
+        positions = self.maze_positions.get(maze_id, [])
+        target_pos = None
+        for pos in positions:
+            if (str(pos["wordnumber"]) == str(wordnumber)
+                    and pos["direction"] == direction):
+                target_pos = pos
+                break
+        if target_pos is None:
+            return None
+
+        deleted_word = target_pos.get("fullword", "")
+        if not deleted_word:
+            # Already empty
+            return None
+
+        # Find the SelectedWords entry that matches this position by
+        # (wordnumber, word == current fullword). Falls back to the first
+        # entry with the same wordnumber if no exact match.
+        entries = self.words_by_maze.get(maze_id, [])
+        target_entry = None
+        for entry in entries:
+            if (str(entry["wordnumber"]) == str(wordnumber)
+                    and entry["word"] == deleted_word):
+                target_entry = entry
+                break
+        if target_entry is None:
+            for entry in entries:
+                if str(entry["wordnumber"]) == str(wordnumber) and entry["word"]:
+                    target_entry = entry
+                    break
+        if target_entry is not None:
+            target_entry["word"] = ""
+
+        target_pos["fullword"] = ""
+
+        self.edited_words.add((maze_id, str(wordnumber)))
+        self._save_edited_words()
+        self._save_words_csv()
+        self._save_mazes_data_csv()
+        self._build_word_index()
+
+        if (deleted_word not in self.word_to_mazes
+                or len(self.word_to_mazes[deleted_word]) == 0):
+            self._add_to_available(deleted_word)
+
+        return deleted_word
+
+    def get_empty_slots(self):
+        """Return a list of empty slots across all mazes (mazesData fullword == "").
+        [{maze_id, wordnumber, direction, length, start_row, start_col}, ...]
+        Sorted by maze_id (numeric) then wordnumber.
+        """
+        results = []
+        for mid, positions in self.maze_positions.items():
+            for pos in positions:
+                if pos.get("fullword"):
+                    continue
+                results.append({
+                    "maze_id": mid,
+                    "wordnumber": int(pos["wordnumber"]),
+                    "direction": pos["direction"],
+                    "length": pos["length"],
+                    "start_row": pos["start_row"],
+                    "start_col": pos["start_col"],
+                })
+        results.sort(key=lambda r: (int(r["maze_id"]), r["wordnumber"], r["direction"]))
+        return results
+
     def _save_mazes_data_csv(self):
         """Write current self.maze_positions back to mazesData.csv (with backup).
         Preserves all columns; only fullword and isreverse are mutated when
@@ -1157,7 +1237,7 @@ def update_word():
     direction = body.get("direction")
     orient = body.get("orient")
 
-    if not all([maze_id, old_word, new_word]):
+    if not maze_id or not new_word or old_word is None:
         return jsonify({"error": "Missing fields"}), 400
 
     success = DATA.update_word(maze_id, old_word, new_word,
@@ -1173,6 +1253,40 @@ def update_word():
         "new_word": new_word,
         "found_in_mazes": other_mazes,
     })
+
+
+@app.route("/api/delete_word", methods=["POST"])
+def delete_word():
+    """Mark a word slot as empty in a maze. The word becomes available
+    again for use in other mazes; this maze tracks an empty slot."""
+    body = request.get_json()
+    maze_id = body.get("maze_id")
+    wordnumber = body.get("wordnumber")
+    direction = body.get("direction")
+    if not all([maze_id, wordnumber is not None, direction]):
+        return jsonify({"error": "Missing fields"}), 400
+    deleted = DATA.delete_word(maze_id, wordnumber, direction)
+    if deleted is None:
+        return jsonify({"success": False, "error": "slot not found"}), 404
+    return jsonify({
+        "success": True,
+        "deleted_word": deleted,
+        "still_in_mazes": sorted(list(DATA.word_to_mazes.get(deleted, set())), key=int),
+    })
+
+
+@app.route("/api/empty_slots")
+def empty_slots():
+    """List all empty slots across all mazes."""
+    slots = DATA.get_empty_slots()
+    by_maze = {}
+    for s in slots:
+        by_maze.setdefault(s["maze_id"], []).append(s)
+    summary = [
+        {"maze_id": mid, "count": len(items), "slots": items}
+        for mid, items in sorted(by_maze.items(), key=lambda kv: int(kv[0]))
+    ]
+    return jsonify({"total": len(slots), "mazes": summary})
 
 
 @app.route("/api/update_hint", methods=["POST"])

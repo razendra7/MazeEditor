@@ -153,6 +153,24 @@
         .alt-badge:hover { background: #1565c0; color: white; }
         .alt-badge.active { background: #1565c0; color: white; }
 
+        .del-btn {
+            display: inline-block; margin-left: 6px; padding: 2px 6px;
+            border-radius: 10px; font-size: 13px; cursor: pointer;
+            background: #ffebee; color: #c62828; border: 1px solid #ffcdd2;
+            user-select: none;
+        }
+        .del-btn:hover { background: #c62828; color: white; }
+        .empty-row {
+            display: flex; align-items: center; gap: 12px; padding: 6px 8px;
+            border-bottom: 1px solid #eceff1; font-size: 13px;
+        }
+        .empty-row .mz {
+            background: #5d4037; color: white; padding: 2px 10px;
+            border-radius: 10px; cursor: pointer; font-weight: bold;
+        }
+        .empty-row .mz:hover { background: #3e2723; }
+        .empty-row .slot { color: #555; font-family: 'Consolas', monospace; }
+
         .pair-row {
             display: flex; align-items: center; gap: 8px; padding: 6px 4px;
             border-bottom: 1px solid #eceff1; cursor: pointer; border-radius: 4px;
@@ -215,6 +233,9 @@
             </button>
             <button id="pairBtn" onclick="togglePairPanel()" style="background:#e65100; margin-left:6px">
                 🔗 Pair Alts
+            </button>
+            <button id="emptyBtn" onclick="toggleEmptyPanel()" style="background:#5d4037; margin-left:6px">
+                📭 Empty Slots <span id="emptyCount" style="font-size:10px"></span>
             </button>
         </div>
     </div>
@@ -291,6 +312,19 @@
             </div>
             <div id="pairResultInfo" class="sug-info"></div>
             <div id="pairResultList" class="suggestions-list" style="flex-direction:column"></div>
+        </div>
+
+        <div class="suggestions-panel" id="emptyPanel" style="display:none">
+            <h3 style="margin-top:0">📭 Empty Slots</h3>
+            <div style="font-size:13px; color:#555; margin-bottom:10px">
+                Mazes with empty word slots (a word was deleted from the slot).
+                Click a maze id to jump to it.
+            </div>
+            <div style="margin-bottom:8px">
+                <button onclick="closeEmptyPanel()" style="background:#777">Close</button>
+            </div>
+            <div id="emptyResultInfo" class="sug-info"></div>
+            <div id="emptyResultList" class="suggestions-list" style="flex-direction:column"></div>
         </div>
     </div>
 
@@ -432,6 +466,7 @@
         });
         loadMaze(mazeIds[0]);
         updateMarkedCount();
+        loadEmptyCount();
     }
 
     // ==================== Navigation ====================
@@ -467,6 +502,7 @@
         } catch (e) {
             currentGridData = null;
         }
+        loadEmptyCount();
     }
 
     function navigate(dir) {
@@ -631,6 +667,8 @@
                           title="${entry.syllables} letters, ${entry.direction || '?'}">
                         ${entry.direction === 'Right' ? '→' : entry.direction === 'Down' ? '↓' : '?'} <small>(${entry.syllables}L)</small>
                     </span>
+                    <span class="del-btn" onclick="deleteWord(${idx})"
+                          title="Delete word from this maze (frees it for other mazes)">🗑</span>
                 </td>
             `;
             tbody.appendChild(tr);
@@ -845,6 +883,94 @@
     }
 
     // ==================== Pair Alternates (v8) ====================
+
+    async function deleteWord(idx) {
+        const entry = currentWords[idx];
+        if (!entry) return;
+        if (!confirm(`Delete "${entry.word}" from this maze?\n\nThe slot will become empty (geometry kept) and the word will be available again for other mazes.`)) return;
+        showSaveStatus('saving');
+        try {
+            const res = await fetch('/api/delete_word', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    maze_id: currentMazeId,
+                    wordnumber: entry.wordnumber,
+                    direction: entry.direction,
+                }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showSaveStatus('saved');
+                await loadMaze(currentMazeId);
+                loadEmptyCount();
+            } else {
+                showSaveStatus('error');
+                alert('Delete failed: ' + (data.error || 'unknown'));
+            }
+        } catch (e) {
+            showSaveStatus('error');
+        }
+    }
+
+    async function loadEmptyCount() {
+        try {
+            const res = await fetch('/api/empty_slots');
+            const data = await res.json();
+            const span = document.getElementById('emptyCount');
+            if (span) span.textContent = data.total ? `(${data.total})` : '';
+        } catch (e) {}
+    }
+
+    function toggleEmptyPanel() {
+        const panel = document.getElementById('emptyPanel');
+        if (panel.style.display === 'none' || !panel.style.display) {
+            openEmptyPanel();
+        } else {
+            closeEmptyPanel();
+        }
+    }
+
+    function closeEmptyPanel() {
+        document.getElementById('emptyPanel').style.display = 'none';
+    }
+
+    async function openEmptyPanel() {
+        const panel = document.getElementById('emptyPanel');
+        panel.style.display = 'block';
+        document.getElementById('suggestionsPanel').classList.remove('show');
+        const info = document.getElementById('emptyResultInfo');
+        const list = document.getElementById('emptyResultList');
+        info.textContent = 'Loading...';
+        list.innerHTML = '';
+        try {
+            const res = await fetch('/api/empty_slots');
+            const data = await res.json();
+            info.innerHTML = `<b>${data.total}</b> empty slot(s) across <b>${data.mazes.length}</b> maze(s).`;
+            if (!data.total) {
+                list.innerHTML = '<div style="color:#999;padding:12px">No empty slots — all mazes are full.</div>';
+            } else {
+                data.mazes.forEach(m => {
+                    const row = document.createElement('div');
+                    row.className = 'empty-row';
+                    const slotsTxt = m.slots.map(s =>
+                        `#${s.wordnumber} ${s.direction} (${s.length}L @ r${s.start_row},c${s.start_col})`
+                    ).join('  ·  ');
+                    row.innerHTML = `<span class="mz" data-mid="${m.maze_id}">Maze ${m.maze_id}</span>` +
+                                    `<span style="color:#777">${m.count} slot(s):</span>` +
+                                    `<span class="slot">${slotsTxt}</span>`;
+                    row.querySelector('.mz').addEventListener('click', () => {
+                        document.getElementById('mazeSelect').value = m.maze_id;
+                        loadMaze(m.maze_id);
+                        closeEmptyPanel();
+                    });
+                    list.appendChild(row);
+                });
+            }
+        } catch (e) {
+            info.textContent = 'Error loading empty slots.';
+        }
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 
     function togglePairPanel() {
         const panel = document.getElementById('pairPanel');
