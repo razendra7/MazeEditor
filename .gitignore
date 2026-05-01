@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Puzzle data (do not commit any user puzzle data)
+*.csv
+*.png
+*.jpg
+*.jpeg
+*.docx
+*.xlsx
+backups/
+edited_words.json
