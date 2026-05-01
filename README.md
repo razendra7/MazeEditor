@@ -13,13 +13,13 @@ A reusable web app for viewing and editing crossword-style maze puzzles with Tel
 
 ## Pair Alternates (v8)
 
-1. In the word list, click the 🔗 badge next to any word — it turns orange.
-2. Crossing words become highlighted with an orange ring.
-3. Click 🔗 on one of the highlighted words.
-4. The suggestion panel lists every compatible `(w1', w2')` pair, marked with the agreed intersection syllable. `⟲` marks reverse-only fits.
+1. Click the orange **🔗 Pair Alts** button in the top-right header (next to ★ Marked).
+2. A dedicated panel opens below the word list. Pick **Word 1** from the dropdown (any word in the current maze).
+3. The **Word 2** dropdown is auto-populated with words that actually cross Word 1.
+4. Click **Find Pairs**. The panel lists every compatible `(w1', w2')` pair, marked with the agreed intersection syllable. `⟲` marks reverse-only fits.
 5. Click a row to atomically replace both words.
 
-Click the same first 🔗 again, or the **Cancel** button, to abort pair mode.
+This panel is independent of the per-row checkbox (which is reserved for ★ marked-words tracking).
 
 ## Usage
 

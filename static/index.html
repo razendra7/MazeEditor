@@ -153,16 +153,6 @@
         .alt-badge:hover { background: #1565c0; color: white; }
         .alt-badge.active { background: #1565c0; color: white; }
 
-        .pair-badge {
-            display: inline-block; background: #fff3e0; color: #e65100; padding: 2px 6px;
-            border-radius: 10px; font-size: 11px; cursor: pointer; border: 1px solid #ffcc80;
-            margin-left: 4px;
-        }
-        .pair-badge:hover { background: #e65100; color: white; }
-        .pair-badge.first  { background: #ff9800; color: white; border-color: #ff9800; }
-        .pair-badge.second { background: #d84315; color: white; border-color: #d84315; }
-        .pair-badge.eligible { box-shadow: 0 0 0 2px #ffb74d; }
-
         .pair-row {
             display: flex; align-items: center; gap: 8px; padding: 6px 4px;
             border-bottom: 1px solid #eceff1; cursor: pointer; border-radius: 4px;
@@ -174,9 +164,6 @@
         .pair-row .w.rev { background: #f3e5f5; border-color: #ce93d8; }
         .pair-row .syl { color: #e65100; font-weight: bold; padding: 0 4px; }
         .pair-row .arr { color: #888; font-size: 12px; }
-        .pair-mode-hint { background: #fff8e1; border: 1px solid #ffe082;
-                          padding: 6px 10px; border-radius: 4px; margin: 8px 0;
-                          font-size: 13px; color: #6d4c00; }
 
         .preview-box {
             position: fixed; bottom: 16px; right: 16px; background: #263238; color: #80cbc4;
@@ -225,6 +212,9 @@
             <span id="mazeCounter" style="font-size:12px; opacity:0.8"></span>
             <button id="markedBtn" onclick="toggleMarkedPage()" style="background:#ff8f00; margin-left:12px">
                 ★ Marked <span id="markedCount" style="font-size:10px"></span>
+            </button>
+            <button id="pairBtn" onclick="togglePairPanel()" style="background:#e65100; margin-left:6px">
+                🔗 Pair Alts
             </button>
         </div>
     </div>
@@ -280,6 +270,27 @@
             <h3 id="sugPanelTitle">Suggestions</h3>
             <div class="sug-info" id="sugPanelInfo"></div>
             <div class="suggestions-list" id="suggestionsList"></div>
+        </div>
+
+        <div class="suggestions-panel" id="pairPanel" style="display:none">
+            <h3 style="margin-top:0">🔗 Pair Alternates</h3>
+            <div style="font-size:13px; color:#555; margin-bottom:10px">
+                Pick two crossing words from this maze and find compatible replacement pairs.
+                Each candidate must satisfy all OTHER crossing constraints, and the chosen pair
+                must agree on the syllable at their shared intersection cell.
+            </div>
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
+                <label style="font-size:13px">Word 1:
+                    <select id="pairW1" onchange="onPairW1Change()" style="font-family:'Noto Sans Telugu',sans-serif; min-width:200px"></select>
+                </label>
+                <label style="font-size:13px">Word 2 (crossing):
+                    <select id="pairW2" style="font-family:'Noto Sans Telugu',sans-serif; min-width:200px"></select>
+                </label>
+                <button id="pairFindBtn" onclick="runPairAlternates()" style="background:#e65100">Find Pairs</button>
+                <button onclick="closePairPanel()" style="background:#777">Close</button>
+            </div>
+            <div id="pairResultInfo" class="sug-info"></div>
+            <div id="pairResultList" class="suggestions-list" style="flex-direction:column"></div>
         </div>
     </div>
 
@@ -620,9 +631,6 @@
                           title="${entry.syllables} letters, ${entry.direction || '?'}">
                         ${entry.direction === 'Right' ? '→' : entry.direction === 'Down' ? '↓' : '?'} <small>(${entry.syllables}L)</small>
                     </span>
-                    <span class="pair-badge" id="pairBadge_${idx}"
-                          onclick="togglePairSelect(${idx})"
-                          title="Pair alternates — pick this word, then a crossing word">🔗</span>
                 </td>
             `;
             tbody.appendChild(tr);
@@ -723,8 +731,6 @@
         document.getElementById('suggestionsPanel').classList.remove('show');
         // Remove active badge highlight
         document.querySelectorAll('.alt-badge.active').forEach(b => b.classList.remove('active'));
-        // Also clear any in-progress pair selection
-        if (typeof clearPairSelection === 'function') clearPairSelection();
     }
 
     async function showAlternates(idx) {
@@ -828,128 +834,132 @@
     }
 
     // ==================== Pair Alternates (v8) ====================
-    let pairFirst = null;       // {idx, word_num, direction, word}
-    let pairCrossings = null;   // cached crossings for the first selection
 
-    function togglePairSelect(idx) {
-        const entry = currentWords[idx];
-        if (!entry) return;
-        const wn = String(entry.wordnumber);
-        const dir = entry.direction || '';
-        if (!dir) { alert('No direction info for this word — cannot pair.'); return; }
-
-        // Cancel if clicking the same first selection
-        if (pairFirst && pairFirst.idx === idx) {
-            clearPairSelection();
-            hideSuggestions();
-            return;
+    function togglePairPanel() {
+        const panel = document.getElementById('pairPanel');
+        if (panel.style.display === 'none' || !panel.style.display) {
+            openPairPanel();
+        } else {
+            closePairPanel();
         }
-
-        if (!pairFirst) {
-            pairFirst = { idx, word_num: wn, direction: dir, word: entry.word };
-            const badge = document.getElementById(`pairBadge_${idx}`);
-            badge.classList.add('first');
-            // Fetch crossings to highlight eligible second picks
-            const params = new URLSearchParams({ maze_id: currentMazeId, word_num: wn, direction: dir });
-            fetch(`/api/crossings?${params}`).then(r => r.json()).then(data => {
-                pairCrossings = data.crossings || [];
-                highlightEligibleCrossings();
-                showPairHint(`Selected <b>${entry.word}</b> (#${wn} ${dir}). Click 🔗 on a crossing word — ${data.count} eligible.`);
-            }).catch(() => {});
-            return;
-        }
-
-        // Second selection
-        if (!isEligibleCrossing(wn, dir)) {
-            alert('That word does not cross the first one. Pick one of the highlighted 🔗 badges, or click the same first one to cancel.');
-            return;
-        }
-
-        const second = { idx, word_num: wn, direction: dir, word: entry.word };
-        document.getElementById(`pairBadge_${idx}`).classList.add('second');
-        loadPairAlternates(pairFirst, second);
     }
 
-    function clearPairSelection() {
-        document.querySelectorAll('.pair-badge').forEach(b => {
-            b.classList.remove('first', 'second', 'eligible');
-        });
-        pairFirst = null;
-        pairCrossings = null;
+    function openPairPanel() {
+        const panel = document.getElementById('pairPanel');
+        panel.style.display = 'block';
+        // Hide single-alternates panel to avoid confusion
+        document.getElementById('suggestionsPanel').classList.remove('show');
+        populatePairW1();
+        document.getElementById('pairResultInfo').innerHTML = '';
+        document.getElementById('pairResultList').innerHTML = '';
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
-    function isEligibleCrossing(wn, dir) {
-        if (!pairCrossings) return false;
-        return pairCrossings.some(c => String(c.word_num) === String(wn) && c.direction === dir);
+    function closePairPanel() {
+        document.getElementById('pairPanel').style.display = 'none';
     }
 
-    function highlightEligibleCrossings() {
-        if (!pairCrossings) return;
-        const eligibleSet = new Set(pairCrossings.map(c => `${c.word_num}|${c.direction}`));
+    function populatePairW1() {
+        const sel = document.getElementById('pairW1');
+        sel.innerHTML = '<option value="">-- choose word --</option>';
         currentWords.forEach((w, i) => {
-            const key = `${w.wordnumber}|${w.direction}`;
-            if (eligibleSet.has(key)) {
-                const b = document.getElementById(`pairBadge_${i}`);
-                if (b && !b.classList.contains('first')) b.classList.add('eligible');
-            }
+            if (!w.direction) return;
+            const opt = document.createElement('option');
+            opt.value = `${w.wordnumber}|${w.direction}`;
+            opt.textContent = `#${w.wordnumber} ${w.direction === 'Right' ? '→' : '↓'} ${w.word}`;
+            opt.dataset.word = w.word;
+            sel.appendChild(opt);
         });
+        document.getElementById('pairW2').innerHTML = '<option value="">-- pick Word 1 first --</option>';
     }
 
-    function showPairHint(html) {
-        const panel = document.getElementById('suggestionsPanel');
-        const title = document.getElementById('sugPanelTitle');
-        const info = document.getElementById('sugPanelInfo');
-        const list = document.getElementById('suggestionsList');
-        title.textContent = 'Pair Alternates';
-        info.innerHTML = `<div class="pair-mode-hint">${html}</div>`;
-        list.innerHTML = '';
-        panel.classList.add('show');
-    }
-
-    async function loadPairAlternates(first, second) {
-        const params = new URLSearchParams({
-            maze_id: currentMazeId,
-            w1_num: first.word_num, w1_dir: first.direction,
-            w2_num: second.word_num, w2_dir: second.direction,
-        });
-        showPairHint(`Computing pairs for <b>${first.word}</b> × <b>${second.word}</b>...`);
+    async function onPairW1Change() {
+        const sel = document.getElementById('pairW1');
+        const sel2 = document.getElementById('pairW2');
+        sel2.innerHTML = '';
+        const val = sel.value;
+        if (!val) {
+            sel2.innerHTML = '<option value="">-- pick Word 1 first --</option>';
+            return;
+        }
+        const [wn, dir] = val.split('|');
+        sel2.innerHTML = '<option value="">-- loading crossings... --</option>';
         try {
+            const params = new URLSearchParams({ maze_id: currentMazeId, word_num: wn, direction: dir });
+            const res = await fetch(`/api/crossings?${params}`);
+            const data = await res.json();
+            sel2.innerHTML = '';
+            if (!data.crossings || data.crossings.length === 0) {
+                sel2.innerHTML = '<option value="">-- no crossing words --</option>';
+                return;
+            }
+            const def = document.createElement('option');
+            def.value = '';
+            def.textContent = `-- choose crossing word (${data.count}) --`;
+            sel2.appendChild(def);
+            data.crossings.forEach(c => {
+                const opt = document.createElement('option');
+                opt.value = `${c.word_num}|${c.direction}`;
+                opt.textContent = `#${c.word_num} ${c.direction === 'Right' ? '→' : '↓'} ${c.word}`;
+                sel2.appendChild(opt);
+            });
+        } catch (e) {
+            sel2.innerHTML = '<option value="">-- error fetching crossings --</option>';
+        }
+    }
+
+    async function runPairAlternates() {
+        const v1 = document.getElementById('pairW1').value;
+        const v2 = document.getElementById('pairW2').value;
+        if (!v1 || !v2) {
+            alert('Please pick both Word 1 and a crossing Word 2.');
+            return;
+        }
+        const [w1n, w1d] = v1.split('|');
+        const [w2n, w2d] = v2.split('|');
+        const info = document.getElementById('pairResultInfo');
+        const list = document.getElementById('pairResultList');
+        info.innerHTML = '<em>Computing pairs...</em>';
+        list.innerHTML = '';
+        try {
+            const params = new URLSearchParams({
+                maze_id: currentMazeId,
+                w1_num: w1n, w1_dir: w1d,
+                w2_num: w2n, w2_dir: w2d,
+            });
             const res = await fetch(`/api/pair_alternates?${params}`);
             const data = await res.json();
             if (data.error) {
-                showPairHint(`Error: ${data.error}`);
+                info.innerHTML = `<span style="color:#c62828">Error: ${data.error}</span>`;
                 return;
             }
-            renderPairAlternates(data, first, second);
+            renderPairResults(data);
         } catch (e) {
-            showPairHint('Network error fetching pair alternates.');
+            info.innerHTML = '<span style="color:#c62828">Network error.</span>';
         }
     }
 
-    function renderPairAlternates(data, first, second) {
-        const title = document.getElementById('sugPanelTitle');
-        const info = document.getElementById('sugPanelInfo');
-        const list = document.getElementById('suggestionsList');
-
-        title.textContent = `Pair Alternates: ${first.word} × ${second.word}`;
+    function renderPairResults(data) {
+        const info = document.getElementById('pairResultInfo');
+        const list = document.getElementById('pairResultList');
         const c1 = data.w1.constraints.map(c => `pos${c.pos+1}=${c.letter}`).join(', ') || 'none';
         const c2 = data.w2.constraints.map(c => `pos${c.pos+1}=${c.letter}`).join(', ') || 'none';
         const trunc = data.truncated ? ' (truncated)' : '';
+
         info.innerHTML =
-          `<div class="pair-mode-hint">` +
-          `<b>${data.pair_count}</b> compatible pair(s)${trunc} — click a row to replace BOTH words. ` +
-          `<button onclick="cancelPairMode()" style="margin-left:8px">Cancel</button><br>` +
-          `<small>${first.word} (#${first.word_num} ${first.direction}, fits=${data.w1.fit_count}, must match ${c1}) ` +
-          `× ${second.word} (#${second.word_num} ${second.direction}, fits=${data.w2.fit_count}, must match ${c2})` +
-          ` — intersection at row ${data.intersection.row}, col ${data.intersection.col}` +
-          `</small></div>`;
+          `<b>${data.pair_count}</b> compatible pair(s)${trunc}. ` +
+          `Click a row to replace BOTH words.<br>` +
+          `<small>Original: <b>${data.w1.word}</b> (#${data.w1.word_num} ${data.w1.direction}, fits=${data.w1.fit_count}, must match ${c1}) ` +
+          `× <b>${data.w2.word}</b> (#${data.w2.word_num} ${data.w2.direction}, fits=${data.w2.fit_count}, must match ${c2})` +
+          ` — intersection at row ${data.intersection.row}, col ${data.intersection.col}.</small>`;
 
         list.innerHTML = '';
-        list.style.display = 'block';
         if (data.pair_count === 0) {
             list.innerHTML = '<div style="color:#999;padding:12px">No compatible pairs found.</div>';
             return;
         }
+        const origW1 = { word: data.w1.word };
+        const origW2 = { word: data.w2.word };
         data.pairs.forEach(p => {
             const row = document.createElement('div');
             row.className = 'pair-row';
@@ -958,13 +968,13 @@
                 `<span class="arr">×</span>` +
                 `<span class="w ${p.w2_orient === 'rev' ? 'rev' : ''}">${p.w2}${p.w2_orient === 'rev' ? ' ⟲' : ''}</span>` +
                 `<span class="syl">[${p.syllable}]</span>`;
-            row.addEventListener('click', () => applyPairReplacement(first, second, p));
+            row.addEventListener('click', () => applyPairReplacement(origW1.word, origW2.word, p));
             list.appendChild(row);
         });
     }
 
-    async function applyPairReplacement(first, second, pair) {
-        if (!confirm(`Replace ${first.word} → ${pair.w1} AND ${second.word} → ${pair.w2}?`)) return;
+    async function applyPairReplacement(oldW1, oldW2, pair) {
+        if (!confirm(`Replace ${oldW1} → ${pair.w1} AND ${oldW2} → ${pair.w2}?`)) return;
         showSaveStatus('saving');
         try {
             const res = await fetch('/api/update_word_pair', {
@@ -972,8 +982,8 @@
                 body: JSON.stringify({
                     maze_id: currentMazeId,
                     replacements: [
-                        { old: first.word,  new: pair.w1 },
-                        { old: second.word, new: pair.w2 },
+                        { old: oldW1, new: pair.w1 },
+                        { old: oldW2, new: pair.w2 },
                     ],
                 }),
             });
@@ -983,16 +993,11 @@
             } else {
                 showSaveStatus('error');
             }
-            cancelPairMode();
+            closePairPanel();
             await loadMaze(currentMazeId);
         } catch (e) {
             showSaveStatus('error');
         }
-    }
-
-    function cancelPairMode() {
-        clearPairSelection();
-        hideSuggestions();
     }
 
     function selectSuggestion(word, idx) {
