@@ -250,6 +250,12 @@
             <button id="invalidBtn" onclick="toggleInvalidPanel()" style="background:#b71c1c; margin-left:6px">
                 🚫 Invalid <span id="invalidCount" style="font-size:10px"></span>
             </button>
+            <button id="approveBtn" onclick="toggleApproveCurrent()" style="background:#2e7d32; margin-left:6px" title="Mark this maze as approved/checked">
+                ✓ <span id="approveBtnLabel">Approve</span>
+            </button>
+            <button id="approvedListBtn" onclick="toggleApprovedPanel()" style="background:#1b5e20; margin-left:6px">
+                ✅ Approved <span id="approvedCount" style="font-size:10px"></span>
+            </button>
         </div>
     </div>
 
@@ -349,6 +355,19 @@
             </div>
             <div id="invalidResultInfo" class="sug-info"></div>
             <div id="invalidResultList" class="suggestions-list" style="flex-direction:column"></div>
+        </div>
+
+        <div class="suggestions-panel" id="approvedPanel" style="display:none">
+            <h3 style="margin-top:0">✅ Approved Mazes</h3>
+            <div style="font-size:13px; color:#555; margin-bottom:10px">
+                Mazes you have reviewed and marked as checked. Click a maze id to jump to it.
+                <em>Note:</em> editing a word in an approved maze automatically removes its approval.
+            </div>
+            <div style="margin-bottom:8px">
+                <button onclick="closeApprovedPanel()" style="background:#777">Close</button>
+            </div>
+            <div id="approvedResultInfo" class="sug-info"></div>
+            <div id="approvedResultList" class="suggestions-list" style="flex-direction:column"></div>
         </div>
     </div>
 
@@ -492,6 +511,7 @@
         updateMarkedCount();
         loadEmptyCount();
         loadInvalidCount();
+        loadApprovedCount();
     }
 
     // ==================== Navigation ====================
@@ -512,6 +532,7 @@
 
         document.getElementById('mazeImage').src = data.image ? `/images/${data.image}` : '';
         currentWords = data.words;
+        updateApproveButton(!!data.approved);
 
         // Load marked state before rendering
         await loadMarkedState(mazeId);
@@ -528,6 +549,7 @@
             currentGridData = null;
         }
         loadEmptyCount();
+        loadApprovedCount();
     }
 
     function navigate(dir) {
@@ -975,6 +997,105 @@
             const span = document.getElementById('invalidCount');
             if (span) span.textContent = data.count ? `(${data.count})` : '';
         } catch (e) {}
+    }
+
+    async function loadApprovedCount() {
+        try {
+            const res = await fetch('/api/approved');
+            const data = await res.json();
+            const span = document.getElementById('approvedCount');
+            if (span) span.textContent = data.count ? `(${data.count})` : '';
+        } catch (e) {}
+    }
+
+    function updateApproveButton(isApproved) {
+        const btn = document.getElementById('approveBtn');
+        const lbl = document.getElementById('approveBtnLabel');
+        if (!btn || !lbl) return;
+        if (isApproved) {
+            btn.style.background = '#388e3c';
+            btn.style.boxShadow = 'inset 0 0 0 2px #fff8';
+            lbl.textContent = 'Approved ✓';
+        } else {
+            btn.style.background = '#2e7d32';
+            btn.style.boxShadow = '';
+            lbl.textContent = 'Approve';
+        }
+    }
+
+    async function toggleApproveCurrent() {
+        if (!currentMazeId) return;
+        const btn = document.getElementById('approveBtn');
+        const willApprove = !(btn && btn.textContent.includes('Approved'));
+        try {
+            const res = await fetch('/api/approve', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ maze_id: currentMazeId, approved: willApprove }),
+            });
+            const data = await res.json();
+            updateApproveButton(data.approved);
+            const span = document.getElementById('approvedCount');
+            if (span) span.textContent = data.approved_count ? `(${data.approved_count})` : '';
+        } catch (e) {}
+    }
+
+    function toggleApprovedPanel() {
+        const p = document.getElementById('approvedPanel');
+        if (p.style.display === 'none' || !p.style.display) openApprovedPanel();
+        else closeApprovedPanel();
+    }
+
+    function closeApprovedPanel() {
+        document.getElementById('approvedPanel').style.display = 'none';
+    }
+
+    async function openApprovedPanel() {
+        const panel = document.getElementById('approvedPanel');
+        panel.style.display = 'block';
+        const info = document.getElementById('approvedResultInfo');
+        const list = document.getElementById('approvedResultList');
+        info.innerHTML = '<em>Loading...</em>';
+        list.innerHTML = '';
+        try {
+            const res = await fetch('/api/approved');
+            const data = await res.json();
+            const total = (typeof mazeIds !== 'undefined' && mazeIds) ? mazeIds.length : 0;
+            info.innerHTML = `<b>${data.count}</b> maze(s) approved${total ? ` of ${total}` : ''}.`;
+            if (!data.maze_ids.length) {
+                list.innerHTML = '<div style="color:#999;padding:12px">No mazes approved yet.</div>';
+            } else {
+                data.maze_ids.forEach(mid => {
+                    const row = document.createElement('div');
+                    row.style.cssText = 'display:flex; gap:10px; align-items:center; padding:6px 8px; border-bottom:1px solid #eee';
+                    const link = document.createElement('span');
+                    link.className = 'maze-link';
+                    link.textContent = `Maze ${mid}`;
+                    link.addEventListener('click', () => {
+                        document.getElementById('mazeSelect').value = mid;
+                        loadMaze(mid);
+                        closeApprovedPanel();
+                    });
+                    const unbtn = document.createElement('button');
+                    unbtn.textContent = 'Unapprove';
+                    unbtn.className = 'unmark-btn';
+                    unbtn.addEventListener('click', async () => {
+                        await fetch('/api/approve', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ maze_id: mid, approved: false }),
+                        });
+                        await openApprovedPanel();
+                        await loadApprovedCount();
+                        if (mid === currentMazeId) updateApproveButton(false);
+                    });
+                    row.appendChild(link);
+                    row.appendChild(unbtn);
+                    list.appendChild(row);
+                });
+            }
+        } catch (e) {
+            info.innerHTML = '<span style="color:#c62828">Error loading.</span>';
+        }
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     async function markInvalid(idx) {

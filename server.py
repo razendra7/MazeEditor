@@ -50,6 +50,7 @@ class PuzzleData:
         self.edited_words_file = os.path.join(puzzle_dir, ".edited_words.json")
         self.marked_words_file = os.path.join(puzzle_dir, ".marked_words.json")
         self.blacklist_file = os.path.join(puzzle_dir, ".blacklist.json")
+        self.approved_file = os.path.join(puzzle_dir, ".approved.json")
         self.reload()
 
     def reload(self):
@@ -63,8 +64,10 @@ class PuzzleData:
         self.edited_words = set()
         self.marked_words = set()  # (maze_id, wordnumber, word) tuples
         self.blacklist = set()
+        self.approved_mazes = set()
         self.maze_positions = {}  # maze_id -> list of position dicts from mazesData.csv
         self._load_blacklist()
+        self._load_approved()
         self._load_selected_words()
         self._load_mazes_data()
         self._load_dictionary()
@@ -118,6 +121,31 @@ class PuzzleData:
         """Persist blacklist to disk."""
         with open(self.blacklist_file, "w", encoding="utf-8") as f:
             json.dump(sorted(self.blacklist), f, ensure_ascii=False, indent=2)
+
+    def _load_approved(self):
+        """Load persisted set of approved mazes (maze_id strings)."""
+        if os.path.exists(self.approved_file):
+            try:
+                with open(self.approved_file, "r", encoding="utf-8") as f:
+                    self.approved_mazes = set(str(x) for x in json.load(f))
+            except Exception:
+                self.approved_mazes = set()
+
+    def _save_approved(self):
+        """Persist approved mazes set to disk."""
+        with open(self.approved_file, "w", encoding="utf-8") as f:
+            json.dump(sorted(self.approved_mazes, key=lambda x: int(x) if str(x).isdigit() else x),
+                     f, ensure_ascii=False, indent=2)
+
+    def set_maze_approved(self, maze_id, approved):
+        """Mark or unmark a maze as approved/checked."""
+        mid = str(maze_id)
+        if approved:
+            self.approved_mazes.add(mid)
+        else:
+            self.approved_mazes.discard(mid)
+        self._save_approved()
+        return mid in self.approved_mazes
 
     def mark_invalid(self, word):
         """Mark a word as invalid:
@@ -1203,6 +1231,10 @@ class PuzzleData:
         # Track this word as edited so grid rendering gives it priority
         self.edited_words.add((maze_id, updated_wordnum))
         self._save_edited_words()
+        # Editing invalidates any prior approval for this maze
+        if str(maze_id) in self.approved_mazes:
+            self.approved_mazes.discard(str(maze_id))
+            self._save_approved()
         self._save_words_csv()
         if mazes_data_dirty:
             self._save_mazes_data_csv()
@@ -1260,6 +1292,9 @@ class PuzzleData:
 
         self.edited_words.add((maze_id, str(wordnumber)))
         self._save_edited_words()
+        if str(maze_id) in self.approved_mazes:
+            self.approved_mazes.discard(str(maze_id))
+            self._save_approved()
         self._save_words_csv()
         self._save_mazes_data_csv()
         self._build_word_index()
@@ -1499,7 +1534,37 @@ def get_maze(maze_id):
             "is_empty": entry["word"] == "",
         })
     image_file = DATA.image_map.get(maze_id, "")
-    return jsonify({"maze_id": maze_id, "image": image_file, "words": words})
+    return jsonify({
+        "maze_id": maze_id,
+        "image": image_file,
+        "words": words,
+        "approved": str(maze_id) in DATA.approved_mazes,
+    })
+
+
+@app.route("/api/approve", methods=["POST"])
+def api_approve():
+    """Mark or unmark a maze as approved/checked.
+    Body: {maze_id, approved: bool}
+    """
+    body = request.get_json() or {}
+    maze_id = body.get("maze_id")
+    approved = bool(body.get("approved", True))
+    if not maze_id:
+        return jsonify({"error": "maze_id required"}), 400
+    state = DATA.set_maze_approved(maze_id, approved)
+    return jsonify({
+        "maze_id": str(maze_id),
+        "approved": state,
+        "approved_count": len(DATA.approved_mazes),
+    })
+
+
+@app.route("/api/approved")
+def api_approved():
+    """List all approved maze ids and the total count."""
+    ids = sorted(DATA.approved_mazes, key=lambda x: int(x) if str(x).isdigit() else x)
+    return jsonify({"maze_ids": ids, "count": len(ids)})
 
 
 @app.route("/api/maze_grid/<maze_id>")
