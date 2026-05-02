@@ -278,6 +278,10 @@ class PuzzleData:
         self.available_words = []
         self.available_set = set()
         self.available_by_length = {}  # {syllable_count: {first_base_char: [words]}}
+        # Performance cache: list of (word, fwd_syls_tuple, rev_syls_tuple) per syllable length
+        self.words_by_length_cache = {}
+        # Performance cache: word -> fwd_syls_tuple
+        self.word_syls = {}
 
         # Try to load from the ready_to_use CSV (has letter breakdown)
         ready_csv = os.path.join(self.puzzle_dir, "common_telugu_cleaned_ready_to_use .csv")
@@ -298,9 +302,14 @@ class PuzzleData:
                 return
             self.available_set.add(word)
             self.available_words.append(word)
-            slen = syllable_count if syllable_count else self._telugu_syllable_count(word)
+            syls = tuple(self._split_telugu_syllables(word))
+            slen = syllable_count if syllable_count else len(syls)
             first = self._first_base_char(word)
             self.available_by_length.setdefault(slen, {}).setdefault(first, []).append(word)
+            self.word_syls[word] = syls
+            self.words_by_length_cache.setdefault(slen, []).append(
+                (word, syls, syls[::-1])
+            )
 
         if os.path.exists(ready_csv):
             with open(ready_csv, "r", encoding="utf-8") as f:
@@ -425,34 +434,23 @@ class PuzzleData:
             if (r, c) in cell_constraints:
                 cell_idx_constraints[cell_idx] = cell_constraints[(r, c)]
 
-        # Get all candidate words with correct syllable count
-        bucket = self.available_by_length.get(target_len, {})
-        candidates = []
-        for words_list in bucket.values():
-            candidates.extend(words_list)
+        # Get all candidate words with correct syllable count (use precomputed cache)
+        cache = self.words_by_length_cache.get(target_len, [])
+        cons_items = list(cell_idx_constraints.items())
 
-        # Filter: check each candidate both forward and reversed
         fitting = []
         seen = set()
-        for cand in candidates:
+        for cand, syls, rev_syls in cache:
             if cand == target_word or cand in seen:
                 continue
-            syls = self._split_telugu_syllables(cand)
-            if len(syls) != target_len:
-                continue
-
-            # Check forward placement
             fwd_fits = True
-            for cell_idx, required in cell_idx_constraints.items():
-                if cell_idx < len(syls) and syls[cell_idx] != required:
+            for cell_idx, required in cons_items:
+                if syls[cell_idx] != required:
                     fwd_fits = False
                     break
-
-            # Check reversed placement
-            rev_syls = list(reversed(syls))
             rev_fits = True
-            for cell_idx, required in cell_idx_constraints.items():
-                if cell_idx < len(rev_syls) and rev_syls[cell_idx] != required:
+            for cell_idx, required in cons_items:
+                if rev_syls[cell_idx] != required:
                     rev_fits = False
                     break
 
@@ -552,21 +550,24 @@ class PuzzleData:
         def fit_candidates(target_pos, idx_cons, intersection_idx):
             """Yield (candidate_word, orientation, syllable_at_intersection)."""
             tlen = target_pos['length']
-            bucket = self.available_by_length.get(tlen, {})
+            cache = self.words_by_length_cache.get(tlen, [])
+            cons_items = list(idx_cons.items())
             results = []
-            for words_list in bucket.values():
-                for cand in words_list:
-                    syls = self._split_telugu_syllables(cand)
-                    if len(syls) != tlen:
-                        continue
-                    # forward
-                    fwd_ok = all(idx >= len(syls) or syls[idx] == val for idx, val in idx_cons.items())
-                    if fwd_ok:
-                        results.append((cand, 'fwd', syls[intersection_idx]))
-                    rev = list(reversed(syls))
-                    rev_ok = all(idx >= len(rev) or rev[idx] == val for idx, val in idx_cons.items())
-                    if rev_ok:
-                        results.append((cand, 'rev', rev[intersection_idx]))
+            for cand, fwd, rev in cache:
+                ok_f = True
+                for idx, val in cons_items:
+                    if fwd[idx] != val:
+                        ok_f = False
+                        break
+                if ok_f:
+                    results.append((cand, 'fwd', fwd[intersection_idx]))
+                ok_r = True
+                for idx, val in cons_items:
+                    if rev[idx] != val:
+                        ok_r = False
+                        break
+                if ok_r:
+                    results.append((cand, 'rev', rev[intersection_idx]))
             return results
 
         cands1 = fit_candidates(p1, cons1, i1)
@@ -704,23 +705,30 @@ class PuzzleData:
         ext_cons = [external_constraints(i) for i in range(len(slots))]
 
         def fit_candidates(target_idx):
-            target_pos = slots[target_idx]
-            idx_cons = ext_cons[target_idx]
-            tlen = target_pos['length']
-            bucket = self.available_by_length.get(tlen, {})
+            tlen = slots[target_idx]['length']
+            cons_items = list(ext_cons[target_idx].items())
+            cache = self.words_by_length_cache.get(tlen, [])
             results = []
-            for words_list in bucket.values():
-                for cand in words_list:
-                    syls = self._split_telugu_syllables(cand)
-                    if len(syls) != tlen:
-                        continue
-                    fwd_ok = all(idx < len(syls) and syls[idx] == val for idx, val in idx_cons.items())
-                    if fwd_ok:
-                        results.append((cand, 'fwd', tuple(syls)))
-                    rev = list(reversed(syls))
-                    rev_ok = all(idx < len(rev) and rev[idx] == val for idx, val in idx_cons.items())
-                    if rev_ok:
-                        results.append((cand, 'rev', tuple(rev)))
+            if not cons_items:
+                for cand, fwd, rev in cache:
+                    results.append((cand, 'fwd', fwd))
+                    results.append((cand, 'rev', rev))
+                return results
+            for cand, fwd, rev in cache:
+                ok_f = True
+                for idx, val in cons_items:
+                    if fwd[idx] != val:
+                        ok_f = False
+                        break
+                if ok_f:
+                    results.append((cand, 'fwd', fwd))
+                ok_r = True
+                for idx, val in cons_items:
+                    if rev[idx] != val:
+                        ok_r = False
+                        break
+                if ok_r:
+                    results.append((cand, 'rev', rev))
             return results
 
         cand_lists = [fit_candidates(i) for i in range(len(slots))]
@@ -1048,11 +1056,19 @@ class PuzzleData:
         if word not in self.available_set:
             return
         self.available_set.discard(word)
-        slen = self._telugu_syllable_count(word)
+        syls = self.word_syls.get(word) or tuple(self._split_telugu_syllables(word))
+        slen = len(syls)
         first = self._first_base_char(word)
         bucket = self.available_by_length.get(slen, {}).get(first, [])
         if word in bucket:
             bucket.remove(word)
+        cache_list = self.words_by_length_cache.get(slen)
+        if cache_list:
+            for i, item in enumerate(cache_list):
+                if item[0] == word:
+                    cache_list.pop(i)
+                    break
+        self.word_syls.pop(word, None)
 
     def _add_to_available(self, word):
         """Add a word to the available pool."""
@@ -1064,9 +1080,14 @@ class PuzzleData:
             return
         self.available_set.add(word)
         self.available_words.append(word)
-        slen = self._telugu_syllable_count(word)
+        syls = tuple(self._split_telugu_syllables(word))
+        slen = len(syls)
         first = self._first_base_char(word)
         self.available_by_length.setdefault(slen, {}).setdefault(first, []).append(word)
+        self.word_syls[word] = syls
+        self.words_by_length_cache.setdefault(slen, []).append(
+            (word, syls, syls[::-1])
+        )
 
     def update_word(self, maze_id, old_word, new_word, wordnumber=None, direction=None, orient=None):
         """Update a word in a maze and save to CSV.
