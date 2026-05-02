@@ -820,6 +820,10 @@ class PuzzleData:
                     })
 
             values = set(c['value'] for c in candidates)
+            if not candidates:
+                # All writers at this intersection are empty (e.g. both
+                # crossing slots have been deleted). Leave the cell blank.
+                continue
             if len(values) == 1:
                 grid[r][c]['value'] = candidates[0]['value']
             else:
