@@ -160,6 +160,8 @@
             user-select: none;
         }
         .del-btn:hover { background: #c62828; color: white; }
+        .invalid-btn { background: #fff3e0; color: #b71c1c; border-color: #ffccbc; }
+        .invalid-btn:hover { background: #b71c1c; color: white; }
         .empty-row {
             display: flex; align-items: center; gap: 12px; padding: 6px 8px;
             border-bottom: 1px solid #eceff1; font-size: 13px;
@@ -236,6 +238,9 @@
             </button>
             <button id="emptyBtn" onclick="toggleEmptyPanel()" style="background:#5d4037; margin-left:6px">
                 📭 Empty Slots <span id="emptyCount" style="font-size:10px"></span>
+            </button>
+            <button id="invalidBtn" onclick="toggleInvalidPanel()" style="background:#b71c1c; margin-left:6px">
+                🚫 Invalid <span id="invalidCount" style="font-size:10px"></span>
             </button>
         </div>
     </div>
@@ -325,6 +330,20 @@
             </div>
             <div id="emptyResultInfo" class="sug-info"></div>
             <div id="emptyResultList" class="suggestions-list" style="flex-direction:column"></div>
+        </div>
+
+        <div class="suggestions-panel" id="invalidPanel" style="display:none">
+            <h3 style="margin-top:0">🚫 Invalid Words (Blacklist)</h3>
+            <div style="font-size:13px; color:#555; margin-bottom:10px">
+                Words marked as invalid are removed from any maze using them
+                and are blocked from appearing as suggestions or alternates anywhere.
+                Click "Restore" to bring a word back into the suggestion pool.
+            </div>
+            <div style="margin-bottom:8px">
+                <button onclick="closeInvalidPanel()" style="background:#777">Close</button>
+            </div>
+            <div id="invalidResultInfo" class="sug-info"></div>
+            <div id="invalidResultList" class="suggestions-list" style="flex-direction:column"></div>
         </div>
     </div>
 
@@ -467,6 +486,7 @@
         loadMaze(mazeIds[0]);
         updateMarkedCount();
         loadEmptyCount();
+        loadInvalidCount();
     }
 
     // ==================== Navigation ====================
@@ -669,6 +689,8 @@
                     </span>
                     <span class="del-btn" onclick="deleteWord(${idx})"
                           title="Delete word from this maze (frees it for other mazes)">🗑</span>
+                    <span class="del-btn invalid-btn" onclick="markInvalid(${idx})"
+                          title="Mark word as invalid (removes from all mazes + blacklists from suggestions)">🚫</span>
                 </td>
             `;
             tbody.appendChild(tr);
@@ -919,6 +941,91 @@
             const span = document.getElementById('emptyCount');
             if (span) span.textContent = data.total ? `(${data.total})` : '';
         } catch (e) {}
+    }
+
+    async function loadInvalidCount() {
+        try {
+            const res = await fetch('/api/blacklist');
+            const data = await res.json();
+            const span = document.getElementById('invalidCount');
+            if (span) span.textContent = data.count ? `(${data.count})` : '';
+        } catch (e) {}
+    }
+
+    async function markInvalid(idx) {
+        const entry = currentWords[idx];
+        if (!entry || !entry.word) return;
+        if (!confirm(`Mark "${entry.word}" as INVALID?\n\nThis will:\n  • Remove it from this maze and any other maze using it\n  • Blacklist it from all suggestions / alternates everywhere\n\nYou can restore it later from the 🚫 Invalid panel.`)) return;
+        showSaveStatus('saving');
+        try {
+            const res = await fetch('/api/mark_invalid', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ word: entry.word }),
+            });
+            const data = await res.json();
+            if (data.success) {
+                showSaveStatus('saved');
+                const removed = (data.removed_from || []).length;
+                if (removed > 1) {
+                    alert(`"${entry.word}" was removed from ${removed} maze(s): ${data.removed_from.join(', ')}`);
+                }
+                await loadMaze(currentMazeId);
+                loadEmptyCount();
+                loadInvalidCount();
+            } else {
+                showSaveStatus('error');
+            }
+        } catch (e) { showSaveStatus('error'); }
+    }
+
+    function toggleInvalidPanel() {
+        const panel = document.getElementById('invalidPanel');
+        if (panel.style.display === 'none' || !panel.style.display) {
+            openInvalidPanel();
+        } else {
+            closeInvalidPanel();
+        }
+    }
+    function closeInvalidPanel() {
+        document.getElementById('invalidPanel').style.display = 'none';
+    }
+    async function openInvalidPanel() {
+        const panel = document.getElementById('invalidPanel');
+        panel.style.display = 'block';
+        document.getElementById('suggestionsPanel').classList.remove('show');
+        const info = document.getElementById('invalidResultInfo');
+        const list = document.getElementById('invalidResultList');
+        info.textContent = 'Loading...';
+        list.innerHTML = '';
+        try {
+            const res = await fetch('/api/blacklist');
+            const data = await res.json();
+            info.innerHTML = `<b>${data.count}</b> blacklisted word(s).`;
+            if (!data.count) {
+                list.innerHTML = '<div style="color:#999;padding:12px">No invalid words yet.</div>';
+            } else {
+                data.words.forEach(w => {
+                    const row = document.createElement('div');
+                    row.className = 'empty-row';
+                    row.innerHTML = `<span class="mz" style="background:#b71c1c">${w}</span>` +
+                                    `<button class="restore-btn" data-w="${w}" style="background:#388e3c;color:white;border:none;padding:3px 10px;border-radius:4px;cursor:pointer">Restore</button>`;
+                    row.querySelector('.restore-btn').addEventListener('click', async (e) => {
+                        const word = e.target.dataset.w;
+                        if (!confirm(`Restore "${word}" to the suggestion pool?`)) return;
+                        await fetch('/api/unblacklist', {
+                            method: 'POST', headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({ word }),
+                        });
+                        loadInvalidCount();
+                        openInvalidPanel();
+                    });
+                    list.appendChild(row);
+                });
+            }
+        } catch (e) {
+            info.textContent = 'Error loading blacklist.';
+        }
+        panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
 
     function toggleEmptyPanel() {

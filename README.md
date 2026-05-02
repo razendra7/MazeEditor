@@ -2,12 +2,13 @@
 
 A reusable web app for viewing and editing crossword-style maze puzzles with Telugu words.
 
-## v9 — Word Deletion & Empty Slot Tracking
+## v9 — Word Deletion, Empty Slot Tracking & Invalid-Word Blacklist
 
 - 🗑 button on every word row deletes the word from that maze. The slot's geometry is kept (so the grid still shows the empty slot), and the deleted word is returned to the available pool so it can be used in other mazes.
+- 🚫 button on every word row marks the word as **invalid**: it is removed from this maze AND every other maze that uses it, and added to a persistent blacklist that filters all suggestions / alternates / pair-alternates globally. Restore from the 🚫 Invalid header panel.
 - 📭 **Empty Slots** header button opens a panel listing every maze with empty slots, including each slot's `wordnumber`, direction, length, and start cell. Click a maze id in the list to jump to it.
-- The empty-slot count is shown in the header button so you always know how many holes remain in the book.
-- Empty slots can be filled back in by clicking the empty word cell and typing/picking a new word — `update_word` now accepts an empty `old_word`.
+- The empty-slot count and invalid-word count are shown in the header buttons so you always know the state of the book.
+- Empty slots can be filled back in by clicking the empty word cell and typing/picking a new word — `update_word` now accepts an empty `old_word` and rejects any blacklisted new word.
 
 ## Features
 

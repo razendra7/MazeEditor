@@ -49,6 +49,7 @@ class PuzzleData:
         self.available_csv = os.path.join(puzzle_dir, "AvailableWords.csv")
         self.edited_words_file = os.path.join(puzzle_dir, ".edited_words.json")
         self.marked_words_file = os.path.join(puzzle_dir, ".marked_words.json")
+        self.blacklist_file = os.path.join(puzzle_dir, ".blacklist.json")
         self.reload()
 
     def reload(self):
@@ -61,7 +62,9 @@ class PuzzleData:
         self.available_by_length = {}
         self.edited_words = set()
         self.marked_words = set()  # (maze_id, wordnumber, word) tuples
+        self.blacklist = set()
         self.maze_positions = {}  # maze_id -> list of position dicts from mazesData.csv
+        self._load_blacklist()
         self._load_selected_words()
         self._load_mazes_data()
         self._load_dictionary()
@@ -101,6 +104,59 @@ class PuzzleData:
         """Persist marked words to disk."""
         with open(self.marked_words_file, "w", encoding="utf-8") as f:
             json.dump(list(self.marked_words), f, ensure_ascii=False)
+
+    def _load_blacklist(self):
+        """Load persisted blacklist of invalid words."""
+        if os.path.exists(self.blacklist_file):
+            try:
+                with open(self.blacklist_file, "r", encoding="utf-8") as f:
+                    self.blacklist = set(json.load(f))
+            except Exception:
+                self.blacklist = set()
+
+    def _save_blacklist(self):
+        """Persist blacklist to disk."""
+        with open(self.blacklist_file, "w", encoding="utf-8") as f:
+            json.dump(sorted(self.blacklist), f, ensure_ascii=False, indent=2)
+
+    def mark_invalid(self, word):
+        """Mark a word as invalid:
+        - Added to the persistent blacklist
+        - Removed from the available pool (filters all alternates / suggestions)
+        - Removed from any maze that currently uses it (those slots become empty)
+        Returns dict with affected mazes.
+        """
+        if not word:
+            return {"word": word, "added": False, "removed_from": []}
+
+        already = word in self.blacklist
+        self.blacklist.add(word)
+        self._save_blacklist()
+        self._remove_from_available(word)
+
+        # Remove the word from every maze that currently has it.
+        affected = sorted(list(self.word_to_mazes.get(word, set())), key=int)
+        for mid in affected:
+            for pos in self.maze_positions.get(mid, []):
+                if pos.get("fullword") == word:
+                    self.delete_word(mid, pos["wordnumber"], pos["direction"])
+
+        return {
+            "word": word,
+            "added": not already,
+            "removed_from": affected,
+        }
+
+    def unmark_invalid(self, word):
+        """Remove a word from the blacklist and put it back in the available pool."""
+        if word not in self.blacklist:
+            return {"word": word, "removed": False}
+        self.blacklist.discard(word)
+        self._save_blacklist()
+        # Restore to available pool only if not currently used in any maze
+        if word and (word not in self.word_to_mazes or not self.word_to_mazes[word]):
+            self._add_to_available(word)
+        return {"word": word, "removed": True}
 
     def toggle_mark_word(self, maze_id, wordnumber, word):
         """Toggle the marked state of a word. Returns new marked state."""
@@ -237,6 +293,8 @@ class PuzzleData:
         def _add_word(word, syllable_count=None):
             """Add a word to the available pool if not already present."""
             if word in self.available_set:
+                return
+            if word in self.blacklist:
                 return
             self.available_set.add(word)
             self.available_words.append(word)
@@ -824,6 +882,10 @@ class PuzzleData:
 
     def _add_to_available(self, word):
         """Add a word to the available pool."""
+        if not word:
+            return
+        if word in self.blacklist:
+            return
         if word in self.available_set:
             return
         self.available_set.add(word)
@@ -1240,6 +1302,9 @@ def update_word():
     if not maze_id or not new_word or old_word is None:
         return jsonify({"error": "Missing fields"}), 400
 
+    if new_word in DATA.blacklist:
+        return jsonify({"error": "Word is blacklisted (marked invalid)"}), 400
+
     success = DATA.update_word(maze_id, old_word, new_word,
                                wordnumber=wordnumber, direction=direction, orient=orient)
 
@@ -1287,6 +1352,36 @@ def empty_slots():
         for mid, items in sorted(by_maze.items(), key=lambda kv: int(kv[0]))
     ]
     return jsonify({"total": len(slots), "mazes": summary})
+
+
+@app.route("/api/mark_invalid", methods=["POST"])
+def mark_invalid():
+    """Mark a word as invalid: removes it from any maze using it and from
+    all alternate / suggestion sources."""
+    body = request.get_json()
+    word = (body.get("word") or "").strip()
+    if not word:
+        return jsonify({"error": "Missing word"}), 400
+    result = DATA.mark_invalid(word)
+    return jsonify({"success": True, **result})
+
+
+@app.route("/api/blacklist")
+def blacklist_list():
+    """Return the current blacklist."""
+    items = sorted(DATA.blacklist)
+    return jsonify({"count": len(items), "words": items})
+
+
+@app.route("/api/unblacklist", methods=["POST"])
+def unblacklist():
+    """Remove a word from the blacklist and restore it to the available pool."""
+    body = request.get_json()
+    word = (body.get("word") or "").strip()
+    if not word:
+        return jsonify({"error": "Missing word"}), 400
+    result = DATA.unmark_invalid(word)
+    return jsonify({"success": True, **result})
 
 
 @app.route("/api/update_hint", methods=["POST"])
