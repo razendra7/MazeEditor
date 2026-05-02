@@ -1579,6 +1579,7 @@ def slot_alternates():
 def update_word():
     """Update a word in a maze and persist to CSV.
     Optional: wordnumber, direction, orient ('fwd'|'rev') to control reverse flag.
+    Pass allow_duplicate=true to bypass the cross-maze uniqueness guard.
     """
     body = request.get_json()
     maze_id = body.get("maze_id")
@@ -1587,12 +1588,24 @@ def update_word():
     wordnumber = body.get("wordnumber")
     direction = body.get("direction")
     orient = body.get("orient")
+    allow_duplicate = bool(body.get("allow_duplicate", False))
 
     if not maze_id or not new_word or old_word is None:
         return jsonify({"error": "Missing fields"}), 400
 
     if new_word in DATA.blacklist:
         return jsonify({"error": "Word is blacklisted (marked invalid)"}), 400
+
+    if not allow_duplicate:
+        other = sorted(
+            [m for m in DATA.word_to_mazes.get(new_word, set()) if m != maze_id], key=int
+        )
+        if other:
+            return jsonify({
+                "error": f"'{new_word}' already used in maze(s) {', '.join(other)}",
+                "duplicate_in_mazes": other,
+                "needs_confirm": True,
+            }), 409
 
     success = DATA.update_word(maze_id, old_word, new_word,
                                wordnumber=wordnumber, direction=direction, orient=orient)
@@ -1765,13 +1778,34 @@ def group_alternates():
 @app.route("/api/update_word_group", methods=["POST"])
 def update_word_group():
     """Apply N word replacements (N>=2) sequentially.
-    Body: {maze_id, replacements: [{old, new, wordnumber, direction, orient}, ...]}
+    Body: {maze_id, replacements: [{old, new, wordnumber, direction, orient}, ...], allow_duplicate?}
     """
     body = request.get_json() or {}
     maze_id = body.get("maze_id")
     reps = body.get("replacements", [])
+    allow_duplicate = bool(body.get("allow_duplicate", False))
     if not maze_id or not isinstance(reps, list) or len(reps) < 2:
         return jsonify({"error": "maze_id and replacements (>=2) required"}), 400
+
+    if not allow_duplicate:
+        new_words = [p.get("new") for p in reps if p.get("new")]
+        # Check duplicates among the new_words themselves
+        from collections import Counter
+        dup_in_self = [w for w, c in Counter(new_words).items() if c > 1]
+        # Check cross-maze duplicates
+        cross = {}
+        for w in set(new_words):
+            other = sorted([m for m in DATA.word_to_mazes.get(w, set()) if m != maze_id], key=int)
+            if other:
+                cross[w] = other
+        if dup_in_self or cross:
+            return jsonify({
+                "error": "Some replacement words conflict with existing words.",
+                "duplicate_within_replacements": dup_in_self,
+                "duplicate_in_mazes": cross,
+                "needs_confirm": True,
+            }), 409
+
     results = []
     for p in reps:
         ok = DATA.update_word(
@@ -1788,13 +1822,36 @@ def update_word_group():
 def update_word_pair():
     """Apply a pair of word replacements atomically (best-effort: sequential).
     Each replacement may include wordnumber, direction, orient ('fwd'|'rev')
-    to control the slot's is_reverse flag.
+    to control the slot's is_reverse flag. Pass allow_duplicate=true to bypass
+    the cross-maze uniqueness guard.
     """
     body = request.get_json()
     maze_id = body.get("maze_id")
-    pairs = body.get("replacements", [])  # [{old, new, wordnumber?, direction?, orient?}, ...]
+    pairs = body.get("replacements", [])
+    allow_duplicate = bool(body.get("allow_duplicate", False))
     if not maze_id or len(pairs) != 2:
         return jsonify({"error": "expected maze_id + 2 replacements"}), 400
+
+    if not allow_duplicate:
+        new_words = [p.get("new") for p in pairs if p.get("new")]
+        if len(new_words) == 2 and new_words[0] == new_words[1]:
+            return jsonify({
+                "error": "Both replacements use the same word.",
+                "duplicate_within_replacements": [new_words[0]],
+                "needs_confirm": True,
+            }), 409
+        cross = {}
+        for w in set(new_words):
+            other = sorted([m for m in DATA.word_to_mazes.get(w, set()) if m != maze_id], key=int)
+            if other:
+                cross[w] = other
+        if cross:
+            return jsonify({
+                "error": "Some replacement words already used in other mazes.",
+                "duplicate_in_mazes": cross,
+                "needs_confirm": True,
+            }), 409
+
     results = []
     for p in pairs:
         ok = DATA.update_word(

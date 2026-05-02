@@ -878,17 +878,31 @@
         showSaveStatus('saving');
         const entry = currentWords[idx] || {};
         try {
-            const res = await fetch('/api/update_word', {
+            const payload = {
+                maze_id: currentMazeId,
+                old_word: oldWord,
+                new_word: newWord,
+                wordnumber: entry.wordnumber,
+                direction: entry.direction,
+                orient: orient || 'fwd',
+            };
+            let res = await fetch('/api/update_word', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    maze_id: currentMazeId,
-                    old_word: oldWord,
-                    new_word: newWord,
-                    wordnumber: entry.wordnumber,
-                    direction: entry.direction,
-                    orient: orient || 'fwd',
-                })
+                body: JSON.stringify(payload)
             });
+            if (res.status === 409) {
+                const conflict = await res.json();
+                const mazes = (conflict.duplicate_in_mazes || []).join(', ');
+                if (!confirm(`⚠ "${newWord}" is already used in maze(s) ${mazes}.\n\nUse it anyway (creates a duplicate)?`)) {
+                    showSaveStatus('idle');
+                    return;
+                }
+                payload.allow_duplicate = true;
+                res = await fetch('/api/update_word', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+            }
             const data = await res.json();
 
             // Update display
@@ -1245,10 +1259,31 @@
                 direction: slotInfos[i].direction,
                 orient: c.orient,
             }));
-            const res = await fetch('/api/update_word_group', {
+            const payload = { maze_id: currentMazeId, replacements };
+            let res = await fetch('/api/update_word_group', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ maze_id: currentMazeId, replacements }),
+                body: JSON.stringify(payload),
             });
+            if (res.status === 409) {
+                const conflict = await res.json();
+                let msg = '⚠ Duplicate word(s) detected:\n';
+                if (conflict.duplicate_within_replacements && conflict.duplicate_within_replacements.length) {
+                    msg += `Used twice in this combo: ${conflict.duplicate_within_replacements.join(', ')}\n`;
+                }
+                if (conflict.duplicate_in_mazes) {
+                    for (const [w, mz] of Object.entries(conflict.duplicate_in_mazes)) {
+                        msg += `${w} already in maze(s) ${mz.join(', ')}\n`;
+                    }
+                }
+                if (!confirm(msg + '\nApply anyway (creates duplicates)?')) {
+                    showSaveStatus('idle'); return;
+                }
+                payload.allow_duplicate = true;
+                res = await fetch('/api/update_word_group', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload),
+                });
+            }
             const data = await res.json();
             showSaveStatus(data.success ? 'saved' : 'error');
             closePairPanel();
@@ -1328,10 +1363,27 @@
         showSaveStatus('saving');
         try {
             if (field === 'word') {
-                const res = await fetch('/api/update_word', {
+                const payload = { maze_id: currentMazeId, old_word: originalValue, new_word: newValue };
+                let res = await fetch('/api/update_word', {
                     method: 'POST', headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ maze_id: currentMazeId, old_word: originalValue, new_word: newValue })
+                    body: JSON.stringify(payload)
                 });
+                if (res.status === 409) {
+                    const conflict = await res.json();
+                    const mazes = (conflict.duplicate_in_mazes || []).join(', ');
+                    if (!confirm(`⚠ "${newValue}" is already used in maze(s) ${mazes}.\n\nUse it anyway (creates a duplicate)?`)) {
+                        // revert UI
+                        span.textContent = originalValue;
+                        currentWords[idx][field] = originalValue;
+                        showSaveStatus('idle');
+                        return;
+                    }
+                    payload.allow_duplicate = true;
+                    res = await fetch('/api/update_word', {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                }
                 const data = await res.json();
                 if (data.found_in_mazes && data.found_in_mazes.length > 0) {
                     const w = document.getElementById(`warning_${idx}`);
