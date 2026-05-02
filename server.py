@@ -733,43 +733,99 @@ class PuzzleData:
 
         cand_lists = [fit_candidates(i) for i in range(len(slots))]
 
-        # Backtracking order: slots with fewest candidates first
-        order = sorted(range(len(slots)), key=lambda i: len(cand_lists[i]))
-        # Quick-lookup: for each slot, which OTHER slots intersect it and at which idx
+        # Early exit if any slot has zero candidates
+        if any(len(c) == 0 for c in cand_lists):
+            slot_info0 = []
+            for i, p in enumerate(slots):
+                slot_info0.append({
+                    'word': p['word'], 'word_num': p['word_num'], 'direction': p['direction'],
+                    'length': p['length'], 'fit_count': len(cand_lists[i]),
+                    'constraints': [{'pos': k, 'letter': v} for k, v in sorted(ext_cons[i].items())],
+                })
+            return {
+                'slots': slot_info0,
+                'intersections': [
+                    {'a': a, 'b': b, 'a_pos': ia, 'b_pos': ib}
+                    for (a, b), (ia, ib) in intersections.items()
+                ],
+                'combinations': [], 'count': 0, 'truncated': False,
+            }
+
         inter_for = {i: [] for i in range(len(slots))}
         for (a, b), (ia, ib) in intersections.items():
             inter_for[a].append((b, ia, ib))
             inter_for[b].append((a, ib, ia))
 
+        # Connected DFS order: start with smallest cand_list, then always pick
+        # a slot that intersects already-chosen ones (smallest cand_list first).
+        order = []
+        chosen = set()
+        first = min(range(len(slots)), key=lambda i: len(cand_lists[i]))
+        order.append(first); chosen.add(first)
+        while len(order) < len(slots):
+            # candidates: slots that intersect anything in 'chosen'
+            connected = [i for i in range(len(slots)) if i not in chosen and any(j in chosen for j, _, _ in inter_for[i])]
+            if connected:
+                nxt = min(connected, key=lambda i: len(cand_lists[i]))
+            else:
+                nxt = min((i for i in range(len(slots)) if i not in chosen), key=lambda i: len(cand_lists[i]))
+            order.append(nxt); chosen.add(nxt)
+
+        # Per-slot index: partner_idx -> {syllable_at_self_intersection: [cand_indices]}
+        cand_by_partner_syl = [{} for _ in range(len(slots))]
+        for idx in range(len(slots)):
+            for (j, ii, ij) in inter_for[idx]:
+                d = {}
+                for k, (cw, corient, csyls) in enumerate(cand_lists[idx]):
+                    d.setdefault(csyls[ii], []).append(k)
+                cand_by_partner_syl[idx][j] = d
+
         results = []
         assignment = [None] * len(slots)
         used_words = set()
+        MAX_VISITS = 2_000_000
+        visits = [0]
+        truncated_by_visits = [False]
 
         def backtrack(pos):
             if len(results) >= max_results:
                 return
+            if visits[0] >= MAX_VISITS:
+                truncated_by_visits[0] = True
+                return
+            visits[0] += 1
             if pos == len(order):
                 results.append([{'word': a[0], 'orient': a[1]} for a in assignment])
                 return
             idx = order[pos]
-            for cand in cand_lists[idx]:
+            # Build candidate index list, restricted by already-assigned partners
+            constrained = None  # set of cand-indices, or None for all
+            for (j, ii, ij) in inter_for[idx]:
+                if assignment[j] is None:
+                    continue
+                req_syl = assignment[j][2][ij]
+                lst = cand_by_partner_syl[idx].get(j, {}).get(req_syl)
+                if not lst:
+                    return  # no candidate satisfies this constraint
+                s = set(lst)
+                constrained = s if constrained is None else (constrained & s)
+                if not constrained:
+                    return
+            if constrained is None:
+                index_iter = range(len(cand_lists[idx]))
+            else:
+                index_iter = constrained
+            for ci in index_iter:
+                cand = cand_lists[idx][ci]
                 cw, corient, csyls = cand
                 if cw in used_words:
-                    continue
-                ok = True
-                for (j, ii, ij) in inter_for[idx]:
-                    if assignment[j] is not None:
-                        if csyls[ii] != assignment[j][2][ij]:
-                            ok = False
-                            break
-                if not ok:
                     continue
                 assignment[idx] = cand
                 used_words.add(cw)
                 backtrack(pos + 1)
                 used_words.discard(cw)
                 assignment[idx] = None
-                if len(results) >= max_results:
+                if len(results) >= max_results or visits[0] >= MAX_VISITS:
                     return
 
         backtrack(0)
@@ -795,7 +851,8 @@ class PuzzleData:
             ],
             'combinations': results,
             'count': len(results),
-            'truncated': len(results) >= max_results,
+            'truncated': len(results) >= max_results or truncated_by_visits[0],
+            'visits': visits[0],
         }
 
     def find_crossing_words(self, maze_id, word_num, direction):
