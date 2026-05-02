@@ -153,6 +153,14 @@
         .alt-badge:hover { background: #1565c0; color: white; }
         .alt-badge.active { background: #1565c0; color: white; }
 
+        .empty-slot-row { background: #fff3e0; }
+        .empty-slot-row:hover { background: #ffe0b2; }
+        .alt-badge.empty-find {
+            background: #ff6f00; color: white; border-color: #e65100;
+            font-weight: bold;
+        }
+        .alt-badge.empty-find:hover { background: #e65100; }
+
         .del-btn {
             display: inline-block; margin-left: 6px; padding: 2px 6px;
             border-radius: 10px; font-size: 13px; cursor: pointer;
@@ -659,8 +667,12 @@
             const key = `${entry.wordnumber}_${entry.word}`;
             const isMarked = markedState[key] || false;
             if (isMarked) tr.classList.add('marked-row');
+            if (entry.is_empty) tr.classList.add('empty-slot-row');
             tr.addEventListener('mouseenter', () => highlightWordInGrid(entry.wordnumber));
             tr.addEventListener('mouseleave', () => highlightWordInGrid(null));
+            const wordCellContent = entry.is_empty
+                ? '<i style="color:#b71c1c">(empty)</i>'
+                : entry.word;
             tr.innerHTML = `
                 <td>${entry.wordnumber}</td>
                 <td><input type="checkbox" class="mark-cb" id="mark_${idx}"
@@ -669,7 +681,7 @@
                 <td>
                     <div class="edit-container">
                         <span class="editable word-cell" id="word_${idx}"
-                              onclick="startEdit(${idx}, 'word')">${entry.word}</span>
+                              onclick="startEdit(${idx}, 'word')">${wordCellContent}</span>
                         <div class="match-warning" id="warning_${idx}"></div>
                     </div>
                 </td>
@@ -682,15 +694,15 @@
                           onclick="startEdit(${idx}, 'hint')">${entry.hint || '—'}</span>
                 </td>
                 <td style="text-align:center">
-                    <span class="alt-badge" id="altBadge_${idx}"
+                    <span class="alt-badge ${entry.is_empty ? 'empty-find' : ''}" id="altBadge_${idx}"
                           onclick="showAlternates(${idx})"
-                          title="${entry.syllables} letters, ${entry.direction || '?'}">
-                        ${entry.direction === 'Right' ? '→' : entry.direction === 'Down' ? '↓' : '?'} <small>(${entry.syllables}L)</small>
+                          title="${entry.is_empty ? 'Find words that fit this empty slot' : entry.syllables + ' letters, ' + (entry.direction || '?')}">
+                        ${entry.is_empty ? '🔍 Find ' : ''}${entry.direction === 'Right' ? '→' : entry.direction === 'Down' ? '↓' : '?'} <small>(${entry.syllables}L)</small>
                     </span>
-                    <span class="del-btn" onclick="deleteWord(${idx})"
+                    ${entry.is_empty ? '' : `<span class="del-btn" onclick="deleteWord(${idx})"
                           title="Delete word from this maze (frees it for other mazes)">🗑</span>
                     <span class="del-btn invalid-btn" onclick="markInvalid(${idx})"
-                          title="Mark word as invalid (removes from all mazes + blacklists from suggestions)">🚫</span>
+                          title="Mark word as invalid (removes from all mazes + blacklists from suggestions)">🚫</span>`}
                 </td>
             `;
             tbody.appendChild(tr);
@@ -795,7 +807,7 @@
 
     async function showAlternates(idx) {
         const entry = currentWords[idx];
-        const word = entry.word;
+        const word = entry.word || '';
         const wordNum = entry.wordnumber;
         const direction = entry.direction || '';
         const badge = document.getElementById(`altBadge_${idx}`);
@@ -809,16 +821,16 @@
 
         // Highlight active badge
         document.querySelectorAll('.alt-badge.active').forEach(b => b.classList.remove('active'));
-        badge.classList.add('active');
+        if (badge) badge.classList.add('active');
 
         try {
-            const encoded = encodeURIComponent(word);
+            // slot_alternates works for both filled AND empty slots
             const params = new URLSearchParams({
                 maze_id: currentMazeId,
                 word_num: wordNum,
                 direction: direction
             });
-            const res = await fetch(`/api/alternates/${encoded}?${params}`);
+            const res = await fetch(`/api/slot_alternates?${params}`);
             const data = await res.json();
 
             const title = document.getElementById('sugPanelTitle');
@@ -830,8 +842,10 @@
                 const cParts = data.constraints.map(c => `pos ${c.pos+1}="${c.letter}"`);
                 infoText += ` (must match: ${cParts.join(', ')})`;
             }
-            infoText += ' — click to replace';
-            title.textContent = `Alternates for: ${word} (${direction || '?'})`;
+            infoText += word ? ' — click to replace' : ' — click to fill empty slot';
+            title.textContent = word
+                ? `Alternates for: ${word} (${direction || '?'})`
+                : `Fill empty slot: #${wordNum} ${direction}`;
             info.textContent = infoText;
             list.innerHTML = '';
             panel.dataset.activeIdx = idx;
@@ -1064,11 +1078,24 @@
                     ).join('  ·  ');
                     row.innerHTML = `<span class="mz" data-mid="${m.maze_id}">Maze ${m.maze_id}</span>` +
                                     `<span style="color:#777">${m.count} slot(s):</span>` +
-                                    `<span class="slot">${slotsTxt}</span>`;
+                                    `<span class="slot">${slotsTxt}</span>` +
+                                    `<button class="find-btn" data-mid="${m.maze_id}" data-wnum="${m.slots[0].wordnumber}" data-dir="${m.slots[0].direction}" style="background:#ff6f00;color:white;border:none;padding:3px 10px;border-radius:4px;cursor:pointer;margin-left:auto">🔍 Find Alts</button>`;
                     row.querySelector('.mz').addEventListener('click', () => {
                         document.getElementById('mazeSelect').value = m.maze_id;
                         loadMaze(m.maze_id);
                         closeEmptyPanel();
+                    });
+                    row.querySelector('.find-btn').addEventListener('click', async (e) => {
+                        const mid = e.target.dataset.mid;
+                        const wnum = e.target.dataset.wnum;
+                        const dir = e.target.dataset.dir;
+                        document.getElementById('mazeSelect').value = mid;
+                        await loadMaze(mid);
+                        closeEmptyPanel();
+                        // Find the matching idx in currentWords and open its alternates
+                        const idx = currentWords.findIndex(w =>
+                            String(w.wordnumber) === String(wnum) && w.direction === dir);
+                        if (idx >= 0) showAlternates(idx);
                     });
                     list.appendChild(row);
                 });

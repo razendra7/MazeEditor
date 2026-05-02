@@ -1229,13 +1229,22 @@ def get_maze(maze_id):
     for i, entry in enumerate(entries):
         info = DATA.word_info.get(entry["word"], {})
         direction = entry_direction.get(i, '')
+        syl_count = DATA._telugu_syllable_count(entry["word"])
+        # For empty slots, fall back to the slot's geometric length
+        if syl_count == 0:
+            for pos in DATA.maze_positions.get(maze_id, []):
+                if (str(pos['wordnumber']) == str(entry['wordnumber'])
+                        and pos['direction'] == direction):
+                    syl_count = pos['length']
+                    break
         words.append({
             "word": entry["word"],
             "wordnumber": entry["wordnumber"],
             "direction": direction,
             "meaning": info.get("meaning", ""),
             "hint": info.get("hint_tel", "") or info.get("hint_eng", ""),
-            "syllables": DATA._telugu_syllable_count(entry["word"]),
+            "syllables": syl_count,
+            "is_empty": entry["word"] == "",
         })
     image_file = DATA.image_map.get(maze_id, "")
     return jsonify({"maze_id": maze_id, "image": image_file, "words": words})
@@ -1284,6 +1293,34 @@ def check_word(word, current_maze):
     mazes = DATA.word_to_mazes.get(word, set())
     other_mazes = sorted([m for m in mazes if m != current_maze], key=int)
     return jsonify({"word": word, "found_in_mazes": other_mazes})
+
+
+@app.route("/api/slot_alternates")
+def slot_alternates():
+    """Get alternate words that fit at a specific (possibly empty) slot.
+    Query params: maze_id, word_num, direction.
+    Works for empty slots (no current word required)."""
+    maze_id = request.args.get('maze_id', '')
+    word_num = request.args.get('word_num', '')
+    direction = request.args.get('direction', '')
+    if not (maze_id and word_num and direction):
+        return jsonify({"error": "missing params"}), 400
+    alts, constraints = DATA.get_maze_alternates(maze_id, word_num, direction)
+    # Find slot length for display
+    slot_len = 0
+    for pos in DATA.maze_positions.get(maze_id, []):
+        if str(pos['wordnumber']) == str(word_num) and pos['direction'] == direction:
+            slot_len = pos['length']
+            break
+    return jsonify({
+        "maze_id": maze_id,
+        "word_num": word_num,
+        "direction": direction,
+        "syllables": slot_len,
+        "count": len(alts),
+        "alternates": alts,
+        "constraints": constraints,
+    })
 
 
 @app.route("/api/update_word", methods=["POST"])
