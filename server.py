@@ -620,6 +620,176 @@ class PuzzleData:
             'truncated': len(pairs) >= max_pairs,
         }
 
+    def get_maze_group_alternates(self, maze_id, slot_specs, max_results=200):
+        """Find compatible replacement combinations for N>=2 linked slots.
+
+        slot_specs: list of {'wordnumber': str, 'direction': 'Right'|'Down'}
+        Each candidate word for each slot must satisfy all EXTERNAL crossing
+        constraints (from non-selected words). For every pair of selected
+        slots that share a cell, the chosen syllables must agree at that cell.
+        Same word may not appear in two different selected slots.
+        """
+        grid = self.get_maze_grid(maze_id)
+        if not grid:
+            return {"error": "no grid"}
+
+        def find_pos(num, direction):
+            for wp in grid['word_positions']:
+                if str(wp['word_num']) == str(num) and wp['direction'] == direction:
+                    return wp
+            return None
+
+        slots = []
+        for s in slot_specs:
+            p = find_pos(s.get('wordnumber'), s.get('direction'))
+            if not p:
+                return {"error": f"slot not found: #{s.get('wordnumber')} {s.get('direction')}"}
+            slots.append(p)
+        if len(slots) < 2:
+            return {"error": "need at least 2 slots"}
+
+        # Dedupe: don't allow the same slot twice
+        keys = [(p['word_num'], p['direction']) for p in slots]
+        if len(set(keys)) != len(keys):
+            return {"error": "duplicate slot in selection"}
+
+        def cells_of(p):
+            out = []
+            for i in range(p['length']):
+                r = p['start_row'] + (i if p['direction'] == 'Down' else 0)
+                c = p['start_col'] + (0 if p['direction'] == 'Down' else i)
+                out.append((r, c))
+            return out
+
+        slot_cells = [cells_of(p) for p in slots]
+        slot_cell_sets = [set(c) for c in slot_cells]
+
+        # Pairwise intersections among selected slots
+        intersections = {}
+        for i in range(len(slots)):
+            for j in range(i + 1, len(slots)):
+                inter = slot_cell_sets[i] & slot_cell_sets[j]
+                if len(inter) > 1:
+                    return {"error": f"slots #{slots[i]['word_num']}{slots[i]['direction']} and #{slots[j]['word_num']}{slots[j]['direction']} share more than one cell"}
+                if len(inter) == 1:
+                    cell = next(iter(inter))
+                    intersections[(i, j)] = (slot_cells[i].index(cell), slot_cells[j].index(cell))
+
+        selected_keys = set(keys)
+
+        def external_constraints(target_idx):
+            target_cells = slot_cells[target_idx]
+            cell_set = slot_cell_sets[target_idx]
+            cross = {}
+            for wp in grid['word_positions']:
+                if (wp['word_num'], wp['direction']) in selected_keys:
+                    continue
+                wp_cells_list = []
+                for i in range(wp['length']):
+                    r = wp['start_row'] + (i if wp['direction'] == 'Down' else 0)
+                    c = wp['start_col'] + (0 if wp['direction'] == 'Down' else i)
+                    wp_cells_list.append((r, c))
+                syls = self._split_telugu_syllables(wp['word'])
+                if wp['reversed']:
+                    syls = list(reversed(syls))
+                for i, cell in enumerate(wp_cells_list):
+                    if cell in cell_set and i < len(syls):
+                        cross[cell] = syls[i]
+            idx_constraints = {}
+            for ci, cell in enumerate(target_cells):
+                if cell in cross:
+                    idx_constraints[ci] = cross[cell]
+            return idx_constraints
+
+        ext_cons = [external_constraints(i) for i in range(len(slots))]
+
+        def fit_candidates(target_idx):
+            target_pos = slots[target_idx]
+            idx_cons = ext_cons[target_idx]
+            tlen = target_pos['length']
+            bucket = self.available_by_length.get(tlen, {})
+            results = []
+            for words_list in bucket.values():
+                for cand in words_list:
+                    syls = self._split_telugu_syllables(cand)
+                    if len(syls) != tlen:
+                        continue
+                    fwd_ok = all(idx < len(syls) and syls[idx] == val for idx, val in idx_cons.items())
+                    if fwd_ok:
+                        results.append((cand, 'fwd', tuple(syls)))
+                    rev = list(reversed(syls))
+                    rev_ok = all(idx < len(rev) and rev[idx] == val for idx, val in idx_cons.items())
+                    if rev_ok:
+                        results.append((cand, 'rev', tuple(rev)))
+            return results
+
+        cand_lists = [fit_candidates(i) for i in range(len(slots))]
+
+        # Backtracking order: slots with fewest candidates first
+        order = sorted(range(len(slots)), key=lambda i: len(cand_lists[i]))
+        # Quick-lookup: for each slot, which OTHER slots intersect it and at which idx
+        inter_for = {i: [] for i in range(len(slots))}
+        for (a, b), (ia, ib) in intersections.items():
+            inter_for[a].append((b, ia, ib))
+            inter_for[b].append((a, ib, ia))
+
+        results = []
+        assignment = [None] * len(slots)
+        used_words = set()
+
+        def backtrack(pos):
+            if len(results) >= max_results:
+                return
+            if pos == len(order):
+                results.append([{'word': a[0], 'orient': a[1]} for a in assignment])
+                return
+            idx = order[pos]
+            for cand in cand_lists[idx]:
+                cw, corient, csyls = cand
+                if cw in used_words:
+                    continue
+                ok = True
+                for (j, ii, ij) in inter_for[idx]:
+                    if assignment[j] is not None:
+                        if csyls[ii] != assignment[j][2][ij]:
+                            ok = False
+                            break
+                if not ok:
+                    continue
+                assignment[idx] = cand
+                used_words.add(cw)
+                backtrack(pos + 1)
+                used_words.discard(cw)
+                assignment[idx] = None
+                if len(results) >= max_results:
+                    return
+
+        backtrack(0)
+
+        # Sort: prefer all-forward, then lexicographic by joined words
+        def sort_key(combo):
+            rev_count = sum(1 for c in combo if c['orient'] == 'rev')
+            return (rev_count, tuple(c['word'] for c in combo))
+        results.sort(key=sort_key)
+
+        slot_info = []
+        for i, p in enumerate(slots):
+            slot_info.append({
+                'word': p['word'], 'word_num': p['word_num'], 'direction': p['direction'],
+                'length': p['length'], 'fit_count': len(cand_lists[i]),
+                'constraints': [{'pos': k, 'letter': v} for k, v in sorted(ext_cons[i].items())],
+            })
+        return {
+            'slots': slot_info,
+            'intersections': [
+                {'a': a, 'b': b, 'a_pos': ia, 'b_pos': ib}
+                for (a, b), (ia, ib) in intersections.items()
+            ],
+            'combinations': results,
+            'count': len(results),
+            'truncated': len(results) >= max_results,
+        }
+
     def find_crossing_words(self, maze_id, word_num, direction):
         """Return a list of words in the same maze that cross the given word.
         Each item: {word_num, direction, word, intersection: {row, col, my_pos, their_pos}}"""
@@ -1498,6 +1668,42 @@ def pair_alternates():
         return jsonify({"error": "missing params"}), 400
     result = DATA.get_maze_pair_alternates(maze_id, w1_num, w1_dir, w2_num, w2_dir)
     return jsonify(result)
+
+
+@app.route("/api/group_alternates", methods=["POST"])
+def group_alternates():
+    """Find compatible replacement combinations for N>=2 selected slots.
+    Body: {maze_id, slots: [{wordnumber, direction}, ...]}
+    """
+    body = request.get_json() or {}
+    maze_id = body.get('maze_id', '')
+    slots = body.get('slots', [])
+    if not maze_id or not isinstance(slots, list) or len(slots) < 2:
+        return jsonify({"error": "maze_id and slots (>=2) required"}), 400
+    result = DATA.get_maze_group_alternates(maze_id, slots)
+    return jsonify(result)
+
+
+@app.route("/api/update_word_group", methods=["POST"])
+def update_word_group():
+    """Apply N word replacements (N>=2) sequentially.
+    Body: {maze_id, replacements: [{old, new, wordnumber, direction, orient}, ...]}
+    """
+    body = request.get_json() or {}
+    maze_id = body.get("maze_id")
+    reps = body.get("replacements", [])
+    if not maze_id or not isinstance(reps, list) or len(reps) < 2:
+        return jsonify({"error": "maze_id and replacements (>=2) required"}), 400
+    results = []
+    for p in reps:
+        ok = DATA.update_word(
+            maze_id, p.get("old"), p.get("new"),
+            wordnumber=p.get("wordnumber"),
+            direction=p.get("direction"),
+            orient=p.get("orient"),
+        )
+        results.append({"old": p.get("old"), "new": p.get("new"), "success": ok})
+    return jsonify({"success": all(r["success"] for r in results), "results": results})
 
 
 @app.route("/api/update_word_pair", methods=["POST"])

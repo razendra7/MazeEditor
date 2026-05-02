@@ -242,7 +242,7 @@
                 ★ Marked <span id="markedCount" style="font-size:10px"></span>
             </button>
             <button id="pairBtn" onclick="togglePairPanel()" style="background:#e65100; margin-left:6px">
-                🔗 Pair Alts
+                🔗 Group Alts
             </button>
             <button id="emptyBtn" onclick="toggleEmptyPanel()" style="background:#5d4037; margin-left:6px">
                 📭 Empty Slots <span id="emptyCount" style="font-size:10px"></span>
@@ -307,22 +307,19 @@
         </div>
 
         <div class="suggestions-panel" id="pairPanel" style="display:none">
-            <h3 style="margin-top:0">🔗 Pair Alternates</h3>
+            <h3 style="margin-top:0">🔗 Group Alternates</h3>
             <div style="font-size:13px; color:#555; margin-bottom:10px">
-                Pick two crossing words from this maze and find compatible replacement pairs.
-                Each candidate must satisfy all OTHER crossing constraints, and the chosen pair
-                must agree on the syllable at their shared intersection cell.
+                Select 2 or more linked words from this maze and find replacement combinations
+                that simultaneously satisfy all crossings (both with each other and with non-selected words).
             </div>
-            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px">
-                <label style="font-size:13px">Word 1:
-                    <select id="pairW1" onchange="onPairW1Change()" style="font-family:'Noto Sans Telugu',sans-serif; min-width:200px"></select>
-                </label>
-                <label style="font-size:13px">Word 2 (crossing):
-                    <select id="pairW2" style="font-family:'Noto Sans Telugu',sans-serif; min-width:200px"></select>
-                </label>
-                <button id="pairFindBtn" onclick="runPairAlternates()" style="background:#e65100">Find Pairs</button>
+            <div style="margin-bottom:8px">
+                <button id="pairFindBtn" onclick="runGroupAlternates()" style="background:#e65100">Find Combos</button>
+                <button onclick="selectAllPairSlots(true)" style="background:#607d8b">Select All</button>
+                <button onclick="selectAllPairSlots(false)" style="background:#607d8b">Clear</button>
                 <button onclick="closePairPanel()" style="background:#777">Close</button>
+                <span id="pairSelCount" style="margin-left:10px; font-size:12px; color:#555"></span>
             </div>
+            <div id="pairSlotList" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; max-height:140px; overflow-y:auto; border:1px solid #ddd; padding:6px; border-radius:4px"></div>
             <div id="pairResultInfo" class="sug-info"></div>
             <div id="pairResultList" class="suggestions-list" style="flex-direction:column"></div>
         </div>
@@ -1118,9 +1115,8 @@
     function openPairPanel() {
         const panel = document.getElementById('pairPanel');
         panel.style.display = 'block';
-        // Hide single-alternates panel to avoid confusion
         document.getElementById('suggestionsPanel').classList.remove('show');
-        populatePairW1();
+        populatePairSlots();
         document.getElementById('pairResultInfo').innerHTML = '';
         document.getElementById('pairResultList').innerHTML = '';
         panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -1130,140 +1126,131 @@
         document.getElementById('pairPanel').style.display = 'none';
     }
 
-    function populatePairW1() {
-        const sel = document.getElementById('pairW1');
-        sel.innerHTML = '<option value="">-- choose word --</option>';
-        currentWords.forEach((w, i) => {
+    function populatePairSlots() {
+        const list = document.getElementById('pairSlotList');
+        list.innerHTML = '';
+        currentWords.forEach((w) => {
             if (!w.direction) return;
-            const opt = document.createElement('option');
-            opt.value = `${w.wordnumber}|${w.direction}`;
-            opt.textContent = `#${w.wordnumber} ${w.direction === 'Right' ? '→' : '↓'} ${w.word}`;
-            opt.dataset.word = w.word;
-            sel.appendChild(opt);
+            const id = `pairslot_${w.wordnumber}_${w.direction}`;
+            const lbl = document.createElement('label');
+            lbl.style.cssText = 'display:inline-flex; align-items:center; gap:4px; font-size:13px; padding:3px 8px; border:1px solid #ccc; border-radius:14px; cursor:pointer; background:#f5f5f5; font-family:"Noto Sans Telugu",sans-serif';
+            const cb = document.createElement('input');
+            cb.type = 'checkbox';
+            cb.id = id;
+            cb.dataset.wordnumber = w.wordnumber;
+            cb.dataset.direction = w.direction;
+            cb.dataset.word = w.word || '';
+            cb.onchange = updatePairSelCount;
+            lbl.appendChild(cb);
+            const txt = document.createElement('span');
+            const arrow = w.direction === 'Right' ? '→' : '↓';
+            txt.textContent = `#${w.wordnumber}${arrow} ${w.word || '(empty)'}`;
+            lbl.appendChild(txt);
+            list.appendChild(lbl);
         });
-        document.getElementById('pairW2').innerHTML = '<option value="">-- pick Word 1 first --</option>';
+        updatePairSelCount();
     }
 
-    async function onPairW1Change() {
-        const sel = document.getElementById('pairW1');
-        const sel2 = document.getElementById('pairW2');
-        sel2.innerHTML = '';
-        const val = sel.value;
-        if (!val) {
-            sel2.innerHTML = '<option value="">-- pick Word 1 first --</option>';
-            return;
-        }
-        const [wn, dir] = val.split('|');
-        sel2.innerHTML = '<option value="">-- loading crossings... --</option>';
-        try {
-            const params = new URLSearchParams({ maze_id: currentMazeId, word_num: wn, direction: dir });
-            const res = await fetch(`/api/crossings?${params}`);
-            const data = await res.json();
-            sel2.innerHTML = '';
-            if (!data.crossings || data.crossings.length === 0) {
-                sel2.innerHTML = '<option value="">-- no crossing words --</option>';
-                return;
-            }
-            const def = document.createElement('option');
-            def.value = '';
-            def.textContent = `-- choose crossing word (${data.count}) --`;
-            sel2.appendChild(def);
-            data.crossings.forEach(c => {
-                const opt = document.createElement('option');
-                opt.value = `${c.word_num}|${c.direction}`;
-                opt.textContent = `#${c.word_num} ${c.direction === 'Right' ? '→' : '↓'} ${c.word}`;
-                sel2.appendChild(opt);
-            });
-        } catch (e) {
-            sel2.innerHTML = '<option value="">-- error fetching crossings --</option>';
-        }
+    function selectAllPairSlots(on) {
+        document.querySelectorAll('#pairSlotList input[type=checkbox]').forEach(cb => cb.checked = on);
+        updatePairSelCount();
     }
 
-    async function runPairAlternates() {
-        const v1 = document.getElementById('pairW1').value;
-        const v2 = document.getElementById('pairW2').value;
-        if (!v1 || !v2) {
-            alert('Please pick both Word 1 and a crossing Word 2.');
-            return;
-        }
-        const [w1n, w1d] = v1.split('|');
-        const [w2n, w2d] = v2.split('|');
+    function updatePairSelCount() {
+        const n = document.querySelectorAll('#pairSlotList input[type=checkbox]:checked').length;
+        document.getElementById('pairSelCount').textContent = `${n} selected`;
+    }
+
+    function getSelectedPairSlots() {
+        return Array.from(document.querySelectorAll('#pairSlotList input[type=checkbox]:checked')).map(cb => ({
+            wordnumber: cb.dataset.wordnumber,
+            direction: cb.dataset.direction,
+            word: cb.dataset.word,
+        }));
+    }
+
+    async function runGroupAlternates() {
+        const sel = getSelectedPairSlots();
         const info = document.getElementById('pairResultInfo');
         const list = document.getElementById('pairResultList');
-        info.innerHTML = '<em>Computing pairs...</em>';
+        if (sel.length < 2) {
+            info.innerHTML = '<span style="color:#c62828">Select at least 2 slots.</span>';
+            list.innerHTML = '';
+            return;
+        }
+        info.innerHTML = '<em>Computing combinations...</em>';
         list.innerHTML = '';
         try {
-            const params = new URLSearchParams({
-                maze_id: currentMazeId,
-                w1_num: w1n, w1_dir: w1d,
-                w2_num: w2n, w2_dir: w2d,
+            const res = await fetch('/api/group_alternates', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    maze_id: currentMazeId,
+                    slots: sel.map(s => ({wordnumber: s.wordnumber, direction: s.direction})),
+                }),
             });
-            const res = await fetch(`/api/pair_alternates?${params}`);
             const data = await res.json();
             if (data.error) {
                 info.innerHTML = `<span style="color:#c62828">Error: ${data.error}</span>`;
                 return;
             }
-            renderPairResults(data);
+            renderGroupResults(data, sel);
         } catch (e) {
             info.innerHTML = '<span style="color:#c62828">Network error.</span>';
         }
     }
 
-    function renderPairResults(data) {
+    function renderGroupResults(data, selectedSlots) {
         const info = document.getElementById('pairResultInfo');
         const list = document.getElementById('pairResultList');
-        const c1 = data.w1.constraints.map(c => `pos${c.pos+1}=${c.letter}`).join(', ') || 'none';
-        const c2 = data.w2.constraints.map(c => `pos${c.pos+1}=${c.letter}`).join(', ') || 'none';
         const trunc = data.truncated ? ' (truncated)' : '';
-
+        const slotSummary = data.slots.map(s => {
+            const arrow = s.direction === 'Right' ? '→' : '↓';
+            const cs = s.constraints.map(c => `pos${c.pos+1}=${c.letter}`).join(', ') || 'none';
+            return `<b>${s.word || '(empty)'}</b> (#${s.word_num}${arrow}, ${s.length}L, fits=${s.fit_count}, ext: ${cs})`;
+        }).join(' &nbsp;·&nbsp; ');
         info.innerHTML =
-          `<b>${data.pair_count}</b> compatible pair(s)${trunc}. ` +
-          `Click a row to replace BOTH words.<br>` +
-          `<small>Original: <b>${data.w1.word}</b> (#${data.w1.word_num} ${data.w1.direction}, fits=${data.w1.fit_count}, must match ${c1}) ` +
-          `× <b>${data.w2.word}</b> (#${data.w2.word_num} ${data.w2.direction}, fits=${data.w2.fit_count}, must match ${c2})` +
-          ` — intersection at row ${data.intersection.row}, col ${data.intersection.col}.</small>`;
-
+            `<b>${data.count}</b> compatible combination(s)${trunc} for <b>${data.slots.length}</b> slot(s). ` +
+            `Click a row to apply ALL replacements at once.<br>` +
+            `<small>${slotSummary}</small>` +
+            (data.intersections.length ? `<br><small>Intersections: ${data.intersections.length}</small>` : '');
         list.innerHTML = '';
-        if (data.pair_count === 0) {
-            list.innerHTML = '<div style="color:#999;padding:12px">No compatible pairs found.</div>';
+        if (data.count === 0) {
+            list.innerHTML = '<div style="color:#999;padding:12px">No compatible combinations found.</div>';
             return;
         }
-        const w1Info = { word: data.w1.word, num: data.w1.word_num, dir: data.w1.direction };
-        const w2Info = { word: data.w2.word, num: data.w2.word_num, dir: data.w2.direction };
-        data.pairs.forEach(p => {
+        data.combinations.forEach(combo => {
             const row = document.createElement('div');
             row.className = 'pair-row';
-            row.innerHTML =
-                `<span class="w ${p.w1_orient === 'rev' ? 'rev' : ''}">${p.w1}${p.w1_orient === 'rev' ? ' ⟲' : ''}</span>` +
-                `<span class="arr">×</span>` +
-                `<span class="w ${p.w2_orient === 'rev' ? 'rev' : ''}">${p.w2}${p.w2_orient === 'rev' ? ' ⟲' : ''}</span>` +
-                `<span class="syl">[${p.syllable}]</span>`;
-            row.addEventListener('click', () => applyPairReplacement(w1Info, w2Info, p));
+            const parts = combo.map((c, i) => {
+                const arrow = data.slots[i].direction === 'Right' ? '→' : '↓';
+                const revMark = c.orient === 'rev' ? ' ⟲' : '';
+                const cls = c.orient === 'rev' ? 'w rev' : 'w';
+                return `<span class="${cls}" title="#${data.slots[i].word_num}${arrow}">${c.word}${revMark}</span>`;
+            });
+            row.innerHTML = parts.join('<span class="arr">×</span>');
+            row.addEventListener('click', () => applyGroupReplacement(data.slots, combo));
             list.appendChild(row);
         });
     }
 
-    async function applyPairReplacement(w1Info, w2Info, pair) {
-        if (!confirm(`Replace ${w1Info.word} → ${pair.w1} AND ${w2Info.word} → ${pair.w2}?`)) return;
+    async function applyGroupReplacement(slotInfos, combo) {
+        const summary = combo.map((c, i) => `${slotInfos[i].word || '(empty)'} → ${c.word}`).join('\n');
+        if (!confirm(`Apply all ${combo.length} replacements?\n\n${summary}`)) return;
         showSaveStatus('saving');
         try {
-            const res = await fetch('/api/update_word_pair', {
+            const replacements = combo.map((c, i) => ({
+                old: slotInfos[i].word,
+                new: c.word,
+                wordnumber: slotInfos[i].word_num,
+                direction: slotInfos[i].direction,
+                orient: c.orient,
+            }));
+            const res = await fetch('/api/update_word_group', {
                 method: 'POST', headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    maze_id: currentMazeId,
-                    replacements: [
-                        { old: w1Info.word, new: pair.w1, wordnumber: w1Info.num, direction: w1Info.dir, orient: pair.w1_orient },
-                        { old: w2Info.word, new: pair.w2, wordnumber: w2Info.num, direction: w2Info.dir, orient: pair.w2_orient },
-                    ],
-                }),
+                body: JSON.stringify({ maze_id: currentMazeId, replacements }),
             });
             const data = await res.json();
-            if (data.success) {
-                showSaveStatus('saved');
-            } else {
-                showSaveStatus('error');
-            }
+            showSaveStatus(data.success ? 'saved' : 'error');
             closePairPanel();
             await loadMaze(currentMazeId);
         } catch (e) {
