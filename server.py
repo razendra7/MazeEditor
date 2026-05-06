@@ -989,6 +989,71 @@ class PuzzleData:
             'max_results': max_results,
         }
 
+    def find_word_island(self, maze_id, word_num, direction):
+        """Return all word slots in the connected component (island) of the
+        given seed slot — i.e., every slot reachable via a chain of shared-
+        cell crossings, including the seed itself.
+
+        Returns list of dicts: {word_num, direction, word, length, is_empty}.
+        Empty (deleted) slots are excluded since they have no syllables.
+        """
+        grid = self.get_maze_grid(maze_id)
+        if not grid:
+            return []
+
+        def cells_of(p):
+            out = []
+            for i in range(p['length']):
+                r = p['start_row'] + (i if p['direction'] == 'Down' else 0)
+                c = p['start_col'] + (0 if p['direction'] == 'Down' else i)
+                out.append((r, c))
+            return out
+
+        positions = grid['word_positions']
+        seed_idx = None
+        for i, wp in enumerate(positions):
+            if str(wp['word_num']) == str(word_num) and wp['direction'] == direction:
+                seed_idx = i
+                break
+        if seed_idx is None:
+            return []
+
+        cell_lists = [cells_of(p) for p in positions]
+        cell_sets = [set(c) for c in cell_lists]
+
+        # Adjacency: two slots are linked iff they share a cell. Empty slots
+        # are still part of the island geometrically, but we exclude them
+        # from the returned set since they have no word to find alts for.
+        adj = {i: [] for i in range(len(positions))}
+        for i in range(len(positions)):
+            for j in range(i + 1, len(positions)):
+                if cell_sets[i] & cell_sets[j]:
+                    adj[i].append(j)
+                    adj[j].append(i)
+
+        seen = {seed_idx}
+        stack = [seed_idx]
+        while stack:
+            cur = stack.pop()
+            for nb in adj[cur]:
+                if nb not in seen:
+                    seen.add(nb)
+                    stack.append(nb)
+
+        out = []
+        for i in sorted(seen, key=lambda k: (int(positions[k]['word_num']),
+                                             positions[k]['direction'])):
+            wp = positions[i]
+            is_empty = not wp.get('word')
+            out.append({
+                'word_num': wp['word_num'],
+                'direction': wp['direction'],
+                'word': wp.get('word', ''),
+                'length': wp['length'],
+                'is_empty': is_empty,
+            })
+        return out
+
     def find_crossing_words(self, maze_id, word_num, direction):
         """Return a list of words in the same maze that cross the given word.
         Each item: {word_num, direction, word, intersection: {row, col, my_pos, their_pos}}"""
@@ -1902,6 +1967,21 @@ def reload_data():
     """Reload all data from disk (useful after external changes)."""
     DATA.reload()
     return jsonify({"success": True, "maze_count": len(DATA.maze_ids)})
+
+
+@app.route("/api/word_island")
+def word_island():
+    """Return all word slots in the connected island of the given seed slot.
+    Two slots are linked if they share at least one grid cell; the island is
+    the transitive closure under that relation.
+    Query params: maze_id, word_num, direction."""
+    maze_id = request.args.get('maze_id', '')
+    word_num = request.args.get('word_num', '')
+    direction = request.args.get('direction', '')
+    if not (maze_id and word_num and direction):
+        return jsonify({"error": "missing params"}), 400
+    items = DATA.find_word_island(maze_id, word_num, direction)
+    return jsonify({"island": items, "count": len(items)})
 
 
 @app.route("/api/crossings")
