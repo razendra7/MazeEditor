@@ -723,7 +723,9 @@
                     <span class="del-btn invalid-btn" onclick="markInvalid(${idx})"
                           title="Mark word as invalid (removes from all mazes + blacklists from suggestions)">🚫</span>
                     <span class="del-btn" onclick="runIslandAlts(${idx})" style="background:#00838f"
-                          title="Find group alternates for this word and every word linked to it (directly or indirectly)">🏝</span>`}
+                          title="Find group alternates for this word and every word linked to it (directly or indirectly)">🏝</span>
+                    <span class="del-btn" onclick="runMinAltSet(${idx})" style="background:#6a1b9a"
+                          title="Find the smallest set of slots needed to swap this word">🎯</span>`}
                 </td>
             `;
             tbody.appendChild(tr);
@@ -1291,6 +1293,59 @@
     function selectAllPairSlots(on) {
         document.querySelectorAll('#pairSlotList input[type=checkbox]').forEach(cb => cb.checked = on);
         updatePairSelCount();
+    }
+
+    async function runMinAltSet(idx) {
+        const entry = currentWords[idx];
+        if (!entry || !entry.direction || !entry.wordnumber) return;
+        try {
+            const url = `/api/minimum_alt_set?maze_id=${encodeURIComponent(currentMazeId)}` +
+                        `&word_num=${encodeURIComponent(entry.wordnumber)}` +
+                        `&direction=${encodeURIComponent(entry.direction)}`;
+            const res = await fetch(url);
+            const data = await res.json();
+            if (data.error) { alert('Error: ' + data.error); return; }
+            if (!data.success) {
+                alert(data.message || 'No minimum set found within the size limit. Try the full island (🏝).');
+                return;
+            }
+            const seedLabel = `#${entry.wordnumber}${entry.direction === 'Right' ? '→' : '↓'} ${entry.word || '(empty)'}`;
+            // Size 1: just open suggestions/alternates panel for the seed.
+            if (data.size === 1) {
+                const ok = confirm(
+                    `${seedLabel} can be swapped on its own — ${data.alt_count} fitting alternative(s).\n\n` +
+                    `Show the alternates panel?`);
+                if (ok && typeof showAlternates === 'function') {
+                    showAlternates(idx);
+                } else if (ok) {
+                    document.getElementById('pairPanel').style.display = 'block';
+                    populatePairSlots();
+                    document.querySelectorAll('#pairSlotList input[type=checkbox]').forEach(cb => {
+                        cb.checked = (cb.dataset.wordnumber == entry.wordnumber &&
+                                      cb.dataset.direction == entry.direction);
+                    });
+                    updatePairSelCount();
+                }
+                return;
+            }
+            // Size >= 2: open the pair panel with exactly these slots pre-checked.
+            const panel = document.getElementById('pairPanel');
+            panel.style.display = 'block';
+            document.getElementById('suggestionsPanel').classList.remove('show');
+            populatePairSlots();
+            const wantSet = new Set(data.slots.map(s => `${s.word_num}|${s.direction}`));
+            document.querySelectorAll('#pairSlotList input[type=checkbox]').forEach(cb => {
+                cb.checked = wantSet.has(`${cb.dataset.wordnumber}|${cb.dataset.direction}`);
+            });
+            updatePairSelCount();
+            document.getElementById('pairResultInfo').innerHTML =
+                `<em>Minimum set for ${seedLabel}: ${data.size} slot(s). Computing combinations...</em>`;
+            document.getElementById('pairResultList').innerHTML = '';
+            panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            await runGroupAlternates();
+        } catch (e) {
+            alert('Network error fetching minimum alt set.');
+        }
     }
 
     async function runIslandAlts(idx) {

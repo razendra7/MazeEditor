@@ -1181,6 +1181,151 @@ class PuzzleData:
             })
         return out
 
+    def find_minimum_alt_set(self, maze_id, word_num, direction, max_size=6):
+        """Find the smallest connected subset of slots (containing the seed)
+        such that there exists a valid combination where the seed gets a word
+        different from its current one, while respecting all crossings with
+        non-selected slots.
+
+        Returns: {success, size, slots, message, ...}
+        - size 1: seed alone has alternates that fit current crossings
+        - size N>1: seed plus N-1 island neighbors must be re-filled together
+        - failure: even with the full island (capped at max_size), no swap
+        """
+        grid = self.get_maze_grid(maze_id)
+        if not grid:
+            return {"success": False, "error": "no grid"}
+
+        positions = grid['word_positions']
+        seed_idx = None
+        for i, wp in enumerate(positions):
+            if str(wp['word_num']) == str(word_num) and wp['direction'] == direction:
+                seed_idx = i
+                break
+        if seed_idx is None:
+            return {"success": False, "error": "seed not found"}
+
+        seed_pos = positions[seed_idx]
+        seed_word = seed_pos.get('word', '') or ''
+
+        def slot_dict(p):
+            return {
+                'word_num': p['word_num'], 'direction': p['direction'],
+                'word': p.get('word', '') or '', 'length': p['length'],
+                'is_empty': not (p.get('word') or ''),
+            }
+
+        # ---- Size 1: seed alone ----
+        if seed_word:
+            alts, _cons = self.get_maze_alternates(
+                maze_id, str(seed_pos['word_num']), seed_pos['direction'])
+            others = [a for a in alts if a.get('word') != seed_word]
+            if others:
+                return {
+                    "success": True, "size": 1,
+                    "slots": [slot_dict(seed_pos)],
+                    "alt_count": len(others),
+                    "message": f"Seed has {len(others)} fitting alternative(s) — no other slot needs changing.",
+                }
+        else:
+            # Empty seed: any candidate at all is a "swap"
+            alts, _cons = self.get_maze_alternates(
+                maze_id, str(seed_pos['word_num']), seed_pos['direction'])
+            if alts:
+                return {
+                    "success": True, "size": 1,
+                    "slots": [slot_dict(seed_pos)],
+                    "alt_count": len(alts),
+                    "message": f"Empty seed has {len(alts)} fitting word(s).",
+                }
+
+        # ---- Build island adjacency (shared-cell) ----
+        def cells_of(p):
+            out = []
+            for i in range(p['length']):
+                r = p['start_row'] + (i if p['direction'] == 'Down' else 0)
+                c = p['start_col'] + (0 if p['direction'] == 'Down' else i)
+                out.append((r, c))
+            return out
+
+        cell_sets = [set(cells_of(p)) for p in positions]
+        adj = {i: set() for i in range(len(positions))}
+        for i in range(len(positions)):
+            for j in range(i + 1, len(positions)):
+                if cell_sets[i] & cell_sets[j]:
+                    adj[i].add(j)
+                    adj[j].add(i)
+
+        seen = {seed_idx}
+        stack = [seed_idx]
+        while stack:
+            cur = stack.pop()
+            for nb in adj[cur]:
+                if nb not in seen:
+                    seen.add(nb)
+                    stack.append(nb)
+        island = seen
+        max_size = min(max_size, len(island))
+
+        # ---- Sizes 2..max_size: enumerate connected subsets containing seed ----
+        def gen_connected_subsets(size):
+            results = set()
+            def rec(subset_fs, frontier_fs):
+                if len(subset_fs) == size:
+                    results.add(subset_fs)
+                    return
+                for v in frontier_fs:
+                    new_subset = subset_fs | frozenset([v])
+                    new_frontier = (frontier_fs - {v}) | (adj[v] & island - new_subset)
+                    rec(new_subset, frozenset(new_frontier))
+            rec(frozenset([seed_idx]), frozenset(adj[seed_idx] & island))
+            return results
+
+        # Order subsets by sum of their slots' fit-count, smallest first (heuristic)
+        for size in range(2, max_size + 1):
+            subsets = gen_connected_subsets(size)
+            # cheap heuristic: prefer subsets whose neighbor count is small (tightly local)
+            ordered = sorted(subsets, key=lambda s: (
+                sum(len(adj[i] & island - s) for i in s),  # fewer external island ties first
+                tuple(sorted(s)),
+            ))
+            for subset in ordered:
+                specs = [{
+                    'wordnumber': positions[i]['word_num'],
+                    'direction': positions[i]['direction'],
+                } for i in subset]
+                result = self.get_maze_group_alternates(maze_id, specs, max_results=300)
+                slots_info = result.get('slots') or []
+                combos = result.get('combinations') or []
+                if not combos:
+                    continue
+                # find seed index in slots_info
+                seed_k = None
+                for k, s in enumerate(slots_info):
+                    if str(s['word_num']) == str(seed_pos['word_num']) and s['direction'] == seed_pos['direction']:
+                        seed_k = k
+                        break
+                if seed_k is None:
+                    continue
+                # is there a combo where seed differs from seed_word?
+                has_swap = False
+                for combo in combos:
+                    if seed_k < len(combo) and combo[seed_k].get('word') != seed_word:
+                        has_swap = True
+                        break
+                if has_swap:
+                    out_slots = [slot_dict(positions[i]) for i in sorted(subset, key=lambda k:(int(positions[k]['word_num']), positions[k]['direction']))]
+                    return {
+                        "success": True, "size": size, "slots": out_slots,
+                        "message": f"Smallest set is {size} slot(s).",
+                    }
+
+        return {
+            "success": False, "size": None,
+            "message": f"No swap found for seed within subsets of size ≤ {max_size}. "
+                       f"Try the full island (🏝).",
+        }
+
     def find_crossing_words(self, maze_id, word_num, direction):
         """Return a list of words in the same maze that cross the given word.
         Each item: {word_num, direction, word, intersection: {row, col, my_pos, their_pos}}"""
@@ -2109,6 +2254,23 @@ def word_island():
         return jsonify({"error": "missing params"}), 400
     items = DATA.find_word_island(maze_id, word_num, direction)
     return jsonify({"island": items, "count": len(items)})
+
+
+@app.route("/api/minimum_alt_set")
+def minimum_alt_set():
+    """Find the smallest connected subset of slots (containing the seed)
+    that admits a swap of the seed word.
+    Query params: maze_id, word_num, direction, [max_size=6]."""
+    maze_id = request.args.get('maze_id', '')
+    word_num = request.args.get('word_num', '')
+    direction = request.args.get('direction', '')
+    try:
+        max_size = int(request.args.get('max_size', '6'))
+    except ValueError:
+        max_size = 6
+    if not (maze_id and word_num and direction):
+        return jsonify({"error": "missing params"}), 400
+    return jsonify(DATA.find_minimum_alt_set(maze_id, word_num, direction, max_size=max_size))
 
 
 @app.route("/api/crossings")
