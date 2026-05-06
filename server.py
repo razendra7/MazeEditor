@@ -951,19 +951,146 @@ class PuzzleData:
                     used.discard(cw)
                     assignment[idx] = None
 
+        # ---- Seeding phase: surface "minimal change" combos first ----
+        # Find combos that keep as many existing slot words as possible by
+        # iterating subsets of slots in decreasing size, pinning each subset
+        # to its existing words and enumerating the rest. This guarantees
+        # such combos are present even when total combos > max_results.
+        from itertools import combinations as _combinations
+
+        existing_pin = []  # (slot_idx, cand_tuple) or (slot_idx, None) if no existing word
+        for i, p in enumerate(slots):
+            ew = p.get('word') or ''
+            if not ew:
+                existing_pin.append((i, None))
+                continue
+            # Maze words may not be in the dictionary cache; build a synthetic
+            # cand tuple matching the (word, orient, syls_in_cell_order) shape
+            # used by the search. orient/syls reflect how the word actually
+            # sits on the grid (reversed flag from mazesData).
+            natural_syls = self._split_telugu_syllables(ew)
+            if len(natural_syls) != p['length']:
+                existing_pin.append((i, None))
+                continue
+            if p.get('reversed'):
+                cell_syls = tuple(reversed(natural_syls))
+                orient = 'rev'
+            else:
+                cell_syls = tuple(natural_syls)
+                orient = 'fwd'
+            # Existing word automatically satisfies all external constraints
+            # (it is already in the maze), so we don't need to verify ext_cons.
+            existing_pin.append((i, (ew, orient, cell_syls)))
+
+        have_existing = [i for i, (_, c) in enumerate(existing_pin) if c is not None]
+
+        def seed_with(pinned_idxs):
+            """Pin the given slot indices to their existing-word cands and
+            enumerate compatible assignments for the rest. Adds combos to
+            `results` via add_combo."""
+            if visits[0] >= MAX_TOTAL_VISITS or len(results) >= max_results:
+                return
+            pin_assign = [None] * len(slots)
+            used_pin = set()
+            for i in pinned_idxs:
+                cand = existing_pin[i][1]
+                if cand is None or cand[0] in used_pin:
+                    return
+                pin_assign[i] = cand
+                used_pin.add(cand[0])
+            for (a, b), (ia, ib) in intersections.items():
+                if pin_assign[a] is not None and pin_assign[b] is not None:
+                    if pin_assign[a][2][ia] != pin_assign[b][2][ib]:
+                        return
+
+            if all(x is not None for x in pin_assign):
+                add_combo(tuple(pin_assign))
+                return
+
+            local_assign = list(pin_assign)
+            local_used = set(used_pin)
+            stopped = [False]
+
+            def bt(pos):
+                if stopped[0] or visits[0] >= MAX_TOTAL_VISITS:
+                    return
+                if len(results) >= max_results:
+                    stopped[0] = True
+                    return
+                visits[0] += 1
+                while pos < len(order) and local_assign[order[pos]] is not None:
+                    pos += 1
+                if pos == len(order):
+                    add_combo(tuple(local_assign))
+                    return
+                idx = order[pos]
+                constrained = None
+                for (j, ii, ij) in inter_for[idx]:
+                    if local_assign[j] is None:
+                        continue
+                    req_syl = local_assign[j][2][ij]
+                    lst = cand_by_partner_syl[idx].get(j, {}).get(req_syl)
+                    if not lst:
+                        return
+                    s = set(lst)
+                    constrained = s if constrained is None else (constrained & s)
+                    if not constrained:
+                        return
+                index_iter = (constrained if constrained is not None
+                              else range(len(cand_lists[idx])))
+                for ci in index_iter:
+                    if stopped[0]:
+                        return
+                    cand = cand_lists[idx][ci]
+                    if cand[0] in local_used:
+                        continue
+                    local_assign[idx] = cand
+                    local_used.add(cand[0])
+                    bt(pos + 1)
+                    local_used.discard(cand[0])
+                    local_assign[idx] = None
+
+            bt(0)
+
+        # Iterate subsets from largest to smallest. Reserve roughly half of
+        # max_results for "minimal change" combos and leave the other half
+        # for the diverse fill below.
+        seed_cap = max(len(slots) + 1, max_results // 2)
+
+        def seed_room():
+            return len(results) < min(seed_cap, max_results)
+
+        for k in range(len(have_existing), 0, -1):
+            if not seed_room() or visits[0] >= MAX_TOTAL_VISITS:
+                break
+            for subset in _combinations(have_existing, k):
+                if not seed_room() or visits[0] >= MAX_TOTAL_VISITS:
+                    break
+                seed_with(list(subset))
+
+        # ---- Diverse fill phase ----
         for combo in rec(0, max_results):
-            add_combo(combo)
             if len(results) >= max_results:
                 break
+            add_combo(combo)
 
         if visits[0] >= MAX_TOTAL_VISITS:
             truncated_by_visits[0] = True
 
-        # Sort: prefer all-forward, then lexicographic
+        # Sort: combos containing more existing-slot words come first
+        # (so users see "minimal change" replacements at the top), then
+        # prefer all-forward, then lexicographic.
+        existing_words = [p.get('word') or '' for p in slots]
+
         def sort_key(combo):
+            existing_matches = sum(
+                1 for i, c in enumerate(combo) if c['word'] == existing_words[i]
+            )
             rev_count = sum(1 for c in combo if c['orient'] == 'rev')
-            return (rev_count, tuple(c['word'] for c in combo))
+            return (-existing_matches, rev_count, tuple(c['word'] for c in combo))
         results.sort(key=sort_key)
+        if len(results) > max_results:
+            results = results[:max_results]
 
         # Per-slot uniqueness summary (for UI / debugging)
         unique_per_slot = [len(s) for s in covered_words]
