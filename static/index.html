@@ -1306,11 +1306,11 @@
                 alert('Could not determine island: ' + (data.error || 'no slots found'));
                 return;
             }
-            // Filter out empty slots — they have no word to find alts for and
-            // would error out the group_alternates call.
-            const slots = data.island.filter(s => !s.is_empty);
+            // Include empty slots — finding combos that FILL the empty
+            // alongside alternates for its crossings is exactly the point.
+            const slots = data.island;
             if (slots.length < 2) {
-                alert('Island has fewer than 2 non-empty slots; nothing to combine.');
+                alert('Island has fewer than 2 slots; nothing to combine.');
                 return;
             }
             // Open the pair panel and pre-select the island slots.
