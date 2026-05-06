@@ -25,3 +25,4 @@ Thumbs.db
 *.xlsx
 backups/
 edited_words.json
+data_snapshots/

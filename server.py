@@ -649,7 +649,7 @@ class PuzzleData:
             'truncated': len(pairs) >= max_pairs,
         }
 
-    def get_maze_group_alternates(self, maze_id, slot_specs, max_results=200):
+    def get_maze_group_alternates(self, maze_id, slot_specs, max_results=1000):
         """Find compatible replacement combinations for N>=2 linked slots.
 
         slot_specs: list of {'wordnumber': str, 'direction': 'Right'|'Down'}
@@ -809,66 +809,171 @@ class PuzzleData:
                 cand_by_partner_syl[idx][j] = d
 
         results = []
-        assignment = [None] * len(slots)
-        used_words = set()
-        MAX_VISITS = 2_000_000
+        dedup = set()
+        covered_words = [set() for _ in range(len(slots))]
         visits = [0]
+        MAX_TOTAL_VISITS = 5_000_000
         truncated_by_visits = [False]
 
-        def backtrack(pos):
-            if len(results) >= max_results:
-                return
-            if visits[0] >= MAX_VISITS:
-                truncated_by_visits[0] = True
+        def add_combo(assignment_tuple):
+            key = tuple((a[0], a[1]) for a in assignment_tuple)
+            if key in dedup:
+                return False
+            dedup.add(key)
+            results.append([{'word': a[0], 'orient': a[1]} for a in assignment_tuple])
+            for i, a in enumerate(assignment_tuple):
+                covered_words[i].add(a[0])
+            return True
+
+        def run_search(initial_pin_idx, initial_pin_cand, on_combo, per_call_visit_cap=None):
+            """Backtrack with optional pinned slot. on_combo(tuple) returns True to stop.
+            per_call_visit_cap: if set, give up this call after that many local visits.
+            """
+            assignment = [None] * len(slots)
+            used_words = set()
+            if initial_pin_idx is not None:
+                assignment[initial_pin_idx] = initial_pin_cand
+                used_words.add(initial_pin_cand[0])
+            stopped = [False]
+            local_visits_start = visits[0]
+
+            def bt(pos):
+                if stopped[0]:
+                    return
+                if visits[0] >= MAX_TOTAL_VISITS:
+                    truncated_by_visits[0] = True
+                    stopped[0] = True
+                    return
+                if per_call_visit_cap is not None and (visits[0] - local_visits_start) >= per_call_visit_cap:
+                    stopped[0] = True
+                    return
+                visits[0] += 1
+                while pos < len(order) and assignment[order[pos]] is not None:
+                    pos += 1
+                if pos == len(order):
+                    if on_combo(tuple(assignment)):
+                        stopped[0] = True
+                    return
+                idx = order[pos]
+                constrained = None
+                for (j, ii, ij) in inter_for[idx]:
+                    if assignment[j] is None:
+                        continue
+                    req_syl = assignment[j][2][ij]
+                    lst = cand_by_partner_syl[idx].get(j, {}).get(req_syl)
+                    if not lst:
+                        return
+                    s = set(lst)
+                    constrained = s if constrained is None else (constrained & s)
+                    if not constrained:
+                        return
+                index_iter = constrained if constrained is not None else range(len(cand_lists[idx]))
+                for ci in index_iter:
+                    if stopped[0]:
+                        return
+                    cand = cand_lists[idx][ci]
+                    cw = cand[0]
+                    if cw in used_words:
+                        continue
+                    assignment[idx] = cand
+                    used_words.add(cw)
+                    bt(pos + 1)
+                    used_words.discard(cw)
+                    assignment[idx] = None
+
+            bt(0)
+
+        # Shared-state recursive enumeration with proportional budget at each
+        # level + per-level rotating offset so the "first" candidate tried at
+        # each level cycles across calls. This gives diversity at every slot
+        # without per-state copies.
+        assignment = [None] * len(slots)
+        used = set()
+        level_counter = [0] * len(slots)
+
+        def rec(pos, budget):
+            if budget <= 0 or visits[0] >= MAX_TOTAL_VISITS:
                 return
             visits[0] += 1
+            while pos < len(order) and assignment[order[pos]] is not None:
+                pos += 1
             if pos == len(order):
-                results.append([{'word': a[0], 'orient': a[1]} for a in assignment])
+                yield tuple(assignment)
                 return
             idx = order[pos]
-            # Build candidate index list, restricted by already-assigned partners
-            constrained = None  # set of cand-indices, or None for all
+            constrained = None
             for (j, ii, ij) in inter_for[idx]:
                 if assignment[j] is None:
                     continue
                 req_syl = assignment[j][2][ij]
                 lst = cand_by_partner_syl[idx].get(j, {}).get(req_syl)
                 if not lst:
-                    return  # no candidate satisfies this constraint
+                    return
                 s = set(lst)
                 constrained = s if constrained is None else (constrained & s)
                 if not constrained:
                     return
-            if constrained is None:
-                index_iter = range(len(cand_lists[idx]))
-            else:
-                index_iter = constrained
-            for ci in index_iter:
-                cand = cand_lists[idx][ci]
-                cw, corient, csyls = cand
-                if cw in used_words:
-                    continue
-                assignment[idx] = cand
-                used_words.add(cw)
-                backtrack(pos + 1)
-                used_words.discard(cw)
-                assignment[idx] = None
-                if len(results) >= max_results or visits[0] >= MAX_VISITS:
+            index_list = (list(constrained) if constrained is not None
+                          else list(range(len(cand_lists[idx]))))
+            n = len(index_list)
+            if n == 0:
+                return
+            # Rotate starting offset each time we enter this level so the
+            # first cand we try is different across sibling calls.
+            offset = level_counter[pos] % n
+            level_counter[pos] += 1
+            yielded = 0
+            for k in range(n):
+                if yielded >= budget or visits[0] >= MAX_TOTAL_VISITS:
                     return
+                ci = index_list[(k + offset) % n]
+                cand = cand_lists[idx][ci]
+                cw = cand[0]
+                if cw in used:
+                    continue
+                remaining = budget - yielded
+                # Estimate available slots ahead (worst case = remaining cands).
+                cands_left = max(1, n - k)
+                per_cand = max(1, (remaining + cands_left - 1) // cands_left)
+                assignment[idx] = cand
+                used.add(cw)
+                try:
+                    # Do NOT break this inner loop early. The inner generator
+                    # is itself budget-limited (per_cand) and will return
+                    # gracefully when exhausted, allowing its own cleanup to
+                    # run. Breaking early would orphan it with stale state in
+                    # the shared 'assignment'/'used' until GC, leaking values
+                    # into sibling iterations.
+                    for combo in rec(pos + 1, per_cand):
+                        yield combo
+                        yielded += 1
+                finally:
+                    used.discard(cw)
+                    assignment[idx] = None
 
-        backtrack(0)
+        for combo in rec(0, max_results):
+            add_combo(combo)
+            if len(results) >= max_results:
+                break
 
-        # Sort: prefer all-forward, then lexicographic by joined words
+        if visits[0] >= MAX_TOTAL_VISITS:
+            truncated_by_visits[0] = True
+
+        # Sort: prefer all-forward, then lexicographic
         def sort_key(combo):
             rev_count = sum(1 for c in combo if c['orient'] == 'rev')
             return (rev_count, tuple(c['word'] for c in combo))
         results.sort(key=sort_key)
+
+        # Per-slot uniqueness summary (for UI / debugging)
+        unique_per_slot = [len(s) for s in covered_words]
 
         slot_info = []
         for i, p in enumerate(slots):
             slot_info.append({
                 'word': p['word'], 'word_num': p['word_num'], 'direction': p['direction'],
                 'length': p['length'], 'fit_count': len(cand_lists[i]),
+                'unique_in_results': unique_per_slot[i],
                 'constraints': [{'pos': k, 'letter': v} for k, v in sorted(ext_cons[i].items())],
             })
         return {
@@ -881,6 +986,7 @@ class PuzzleData:
             'count': len(results),
             'truncated': len(results) >= max_results or truncated_by_visits[0],
             'visits': visits[0],
+            'max_results': max_results,
         }
 
     def find_crossing_words(self, maze_id, word_num, direction):
@@ -1836,7 +1942,12 @@ def group_alternates():
     slots = body.get('slots', [])
     if not maze_id or not isinstance(slots, list) or len(slots) < 2:
         return jsonify({"error": "maze_id and slots (>=2) required"}), 400
-    result = DATA.get_maze_group_alternates(maze_id, slots)
+    try:
+        max_results = int(body.get('max_results', 1000))
+    except (TypeError, ValueError):
+        max_results = 1000
+    max_results = max(1, min(max_results, 20000))
+    result = DATA.get_maze_group_alternates(maze_id, slots, max_results=max_results)
     return jsonify(result)
 
 
